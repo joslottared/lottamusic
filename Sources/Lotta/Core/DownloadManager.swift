@@ -217,12 +217,62 @@ final class DownloadManager: NSObject, ObservableObject {
         let ids = playlistTracks[playlistId] ?? []
         playlistInfo[playlistId] = nil
         playlistTracks[playlistId] = nil
+        delete(unreferenced(ids))
+    }
+
+    /// Of `ids`, those no downloaded playlist or downloaded album still needs.
+    private func unreferenced(_ ids: [String]) -> [String] {
         let keptByPlaylists = Set(playlistTracks.values.joined())
-        let removable = ids.filter { id in
+        return ids.filter { id in
             let albumId = downloaded[id]?.item.albumId ?? pending[id]?.albumId
             return !keptByPlaylists.contains(id) && albumId.map { albumInfo[$0] == nil } ?? true
         }
-        delete(removable)
+    }
+
+    // MARK: - Sync
+
+    /// Albums the user downloaded explicitly (not loose tracks).
+    var syncedAlbumIds: [String] { Array(albumInfo.keys) }
+    var syncedPlaylistIds: [String] { Array(playlistInfo.keys) }
+
+    /// Brings a downloaded album in line with the server. Returns how many
+    /// new tracks were queued.
+    @discardableResult
+    func syncAlbum(_ album: BaseItem, tracks: [BaseItem]) -> Int {
+        guard albumInfo[album.id] != nil, !tracks.isEmpty else { return 0 }
+        refreshMetadata(tracks)
+        let new = tracks.filter { downloaded[$0.id] == nil && pending[$0.id] == nil }.count
+        download(tracks, album: album)
+        return new
+    }
+
+    /// Brings a downloaded playlist in line with the server: queues added
+    /// tracks and drops removed ones (unless something else keeps them).
+    /// Returns (added, removed).
+    @discardableResult
+    func syncPlaylist(_ playlist: BaseItem, tracks: [BaseItem]) -> (added: Int, removed: Int) {
+        guard playlistInfo[playlist.id] != nil else { return (0, 0) }
+        let old = playlistTracks[playlist.id] ?? []
+        let newIds = Set(tracks.map(\.id))
+        refreshMetadata(tracks)
+        let added = tracks.filter { downloaded[$0.id] == nil && pending[$0.id] == nil }.count
+        download(tracks, playlist: playlist)
+        let gone = unreferenced(old.filter { !newIds.contains($0) })
+        delete(gone)
+        return (added, gone.count)
+    }
+
+    /// Keeps titles/artists of downloaded tracks current.
+    private func refreshMetadata(_ tracks: [BaseItem]) {
+        for t in tracks {
+            guard var d = downloaded[t.id] else { continue }
+            var fresh = t
+            fresh.playlistItemId = t.playlistItemId ?? d.item.playlistItemId
+            if d.item != fresh {
+                d.item = fresh
+                downloaded[t.id] = d
+            }
+        }
     }
 
     func deleteAll() {

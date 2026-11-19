@@ -2,6 +2,8 @@ import SwiftUI
 
 struct MainView: View {
     @State private var showPlayer = false
+    @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var network: NetworkMonitor
 
     var body: some View {
         TabView {
@@ -20,6 +22,7 @@ struct MainView: View {
         .fullScreenCover(isPresented: $showPlayer) {
             NowPlayingView()
         }
+        .task { if network.isOnline { library.autoSyncIfNeeded() } }
     }
 }
 

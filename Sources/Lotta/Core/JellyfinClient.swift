@@ -147,6 +147,23 @@ struct JellyfinClient: Sendable {
         ])
     }
 
+    /// Every track in the library, fetched in pages. `onPage` reports (loaded, total).
+    func allTracks(pageSize: Int = 1500, onPage: @Sendable (Int, Int) async -> Void = { _, _ in }) async throws -> [BaseItem] {
+        var all: [BaseItem] = []
+        while true {
+            try Task.checkCancellation()
+            let r: ItemsResponse = try await get("Items", [
+                "userId": creds.userId, "IncludeItemTypes": "Audio", "Recursive": "true",
+                "SortBy": "Album,ParentIndexNumber,IndexNumber,SortName",
+                "StartIndex": "\(all.count)", "Limit": "\(pageSize)",
+            ])
+            all += r.items
+            let total = r.totalRecordCount ?? all.count
+            await onPage(all.count, total)
+            if r.items.count < pageSize || all.count >= total { return all }
+        }
+    }
+
     func search(_ term: String) async throws -> [BaseItem] {
         try await items([
             "searchTerm": term, "IncludeItemTypes": "MusicArtist,MusicAlbum,Audio,Playlist",

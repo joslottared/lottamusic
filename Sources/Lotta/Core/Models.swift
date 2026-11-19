@@ -77,7 +77,11 @@ struct BaseItem: Codable, Identifiable, Hashable, Sendable {
 
 struct ItemsResponse: Decodable {
     let items: [BaseItem]
-    enum CodingKeys: String, CodingKey { case items = "Items" }
+    var totalRecordCount: Int? = nil
+    enum CodingKeys: String, CodingKey {
+        case items = "Items"
+        case totalRecordCount = "TotalRecordCount"
+    }
 }
 
 struct Lyrics: Codable, Sendable, Equatable {
@@ -128,6 +132,9 @@ enum AudioQuality: String, CaseIterable, Codable, Identifiable, Sendable {
 enum AppSettings {
     static let streamQualityKey = "lotta.quality.stream"
     static let downloadQualityKey = "lotta.quality.download"
+    static let autoSyncKey = "lotta.sync.auto"
+    static let syncArtworkKey = "lotta.sync.artwork"
+    static let lastSyncKey = "lotta.sync.last"
 
     static var streamQuality: AudioQuality {
         AudioQuality(rawValue: UserDefaults.standard.string(forKey: streamQualityKey) ?? "") ?? .original

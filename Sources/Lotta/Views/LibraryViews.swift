@@ -39,6 +39,14 @@ struct LibraryView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal)
 
+                if let sync = library.sync {
+                    SyncProgressRow(sync: sync)
+                        .padding(12)
+                        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(.horizontal)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
                 if !network.isOnline {
                     Label("Sin conexión · mostrando tus descargas", systemImage: "wifi.slash")
                         .font(.footnote.weight(.medium))
@@ -70,6 +78,7 @@ struct LibraryView: View {
                 }
             }
             .padding(.bottom, 20)
+            .animation(.spring(response: 0.35), value: library.isSyncing)
         }
         .navigationTitle("Biblioteca")
         .toolbar {
@@ -79,7 +88,16 @@ struct LibraryView: View {
                 }
                 .accessibilityLabel("Solo descargado")
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if library.isSyncing {
+                    ProgressView()
+                } else {
+                    Button { library.startSync() } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(!network.isOnline)
+                    .accessibilityLabel("Sincronizar biblioteca")
+                }
                 Button { showSettings = true } label: { Image(systemName: "gearshape") }
             }
         }
@@ -435,6 +453,10 @@ struct SearchView: View {
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var downloads: DownloadManager
+    @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var network: NetworkMonitor
+    @AppStorage(AppSettings.autoSyncKey) private var autoSync = true
+    @AppStorage(AppSettings.syncArtworkKey) private var syncArtwork = true
     @Environment(\.dismiss) private var dismiss
     @AppStorage(AppSettings.streamQualityKey) private var streamQuality: AudioQuality = .original
     @AppStorage(AppSettings.downloadQualityKey) private var downloadQuality: AudioQuality = .original
@@ -464,6 +486,39 @@ struct SettingsView: View {
                     Text("“Original” usa el archivo tal cual (FLAC, ALAC, AAC, MP3). Si iOS no soporta el formato, el servidor lo convierte a MP3.")
                 }
 
+                Section {
+                    if let sync = library.sync {
+                        SyncProgressRow(sync: sync)
+                        Button("Cancelar", role: .destructive) { library.cancelSync() }
+                    } else {
+                        Button {
+                            library.startSync()
+                        } label: {
+                            Label("Sincronizar biblioteca", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .disabled(!network.isOnline)
+                    }
+                    LabeledContent("Última sincronización") {
+                        if let last = library.lastSync {
+                            Text(last, format: .relative(presentation: .named))
+                        } else {
+                            Text("Nunca")
+                        }
+                    }
+                    Toggle("Sincronizar al abrir la app", isOn: $autoSync)
+                    Toggle("Guardar portadas", isOn: $syncArtwork)
+                } header: {
+                    Text("Biblioteca")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let summary = library.lastSyncSummary { Text(summary) }
+                        if let err = library.lastError, !library.isSyncing {
+                            Text(err).foregroundStyle(.red)
+                        }
+                        Text("Guarda álbumes, artistas, playlists y sus canciones para navegar sin conexión, y actualiza tus playlists y álbumes descargados con los cambios del servidor. Al abrir la app se sincroniza como máximo una vez al día.")
+                    }
+                }
+
                 Section("Almacenamiento") {
                     LabeledContent("Descargas",
                                    value: ByteCountFormatter.string(fromByteCount: downloads.totalBytes, countStyle: .file))
@@ -490,6 +545,26 @@ struct SettingsView: View {
                     dismiss()
                     model.logout()
                 }
+            }
+        }
+    }
+}
+
+struct SyncProgressRow: View {
+    let sync: LibraryStore.SyncProgress
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Sincronizando · \(sync.phase)")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .contentTransition(.numericText())
+            }
+            if let f = sync.fraction {
+                ProgressView(value: f).animation(.default, value: f)
             }
         }
     }

@@ -49,6 +49,13 @@ actor ArtworkCache {
         return anyCached(itemId)
     }
 
+    /// Downloads the image to disk if it isn't there yet (no decoding when cached).
+    func prefetch(_ itemId: String, size: Int) async {
+        let file = Storage.artwork.appendingPathComponent("\(itemId)_\(size).jpg")
+        if FileManager.default.fileExists(atPath: file.path) { return }
+        _ = await image(for: itemId, size: size)
+    }
+
     /// Offline fallback: any size we have on disk for this item.
     private func anyCached(_ itemId: String) -> UIImage? {
         guard let files = try? FileManager.default.contentsOfDirectory(atPath: Storage.artwork.path) else { return nil }

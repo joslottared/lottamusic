@@ -10,6 +10,16 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var playlists: [BaseItem] = []
     @Published private(set) var isRefreshing = false
     @Published var lastError: String?
+    @Published private(set) var sync: SyncProgress?
+    @Published private(set) var lastSync: Date?
+    @Published private(set) var lastSyncSummary: String?
+    private var syncTask: Task<Void, Never>?
+
+    struct SyncProgress: Equatable {
+        var phase: String
+        /// 0…1, or nil while the amount of work isn't known yet.
+        var fraction: Double?
+    }
 
     private var tracksByAlbum: [String: [BaseItem]] = [:]
     weak var downloads: DownloadManager?
@@ -30,6 +40,7 @@ final class LibraryStore: ObservableObject {
             tracksByAlbum = s.tracksByAlbum
             playlists = s.playlists ?? []
         }
+        lastSync = UserDefaults.standard.object(forKey: AppSettings.lastSyncKey) as? Date
     }
 
     private func save() {
@@ -42,6 +53,10 @@ final class LibraryStore: ObservableObject {
         playlists = []
         tracksByAlbum = [:]
         Storage.remove(Self.fileName)
+        cancelSync()
+        lastSync = nil
+        lastSyncSummary = nil
+        UserDefaults.standard.removeObject(forKey: AppSettings.lastSyncKey)
     }
 
     func refresh() async {
@@ -59,6 +74,144 @@ final class LibraryStore: ObservableObject {
             save()
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Full sync
+
+    var isSyncing: Bool { sync != nil }
+
+    /// Starts a full sync unless one is running. Survives the calling view
+    /// going away.
+    func startSync() {
+        guard syncTask == nil, ClientBox.shared.client != nil else { return }
+        syncTask = Task { [weak self] in
+            await self?.runSync()
+            self?.syncTask = nil
+        }
+    }
+
+    func cancelSync() {
+        syncTask?.cancel()
+        syncTask = nil
+        sync = nil
+    }
+
+    /// Auto sync on launch, at most once a day.
+    func autoSyncIfNeeded() {
+        let d = UserDefaults.standard
+        guard d.object(forKey: AppSettings.autoSyncKey) as? Bool ?? true else { return }
+        if let last = lastSync, Date().timeIntervalSince(last) < 24 * 3600 { return }
+        startSync()
+    }
+
+    /// Downloads the whole library's metadata (albums, artists, playlists and
+    /// every tracklist) so it can be browsed offline, updates downloaded
+    /// albums/playlists with server changes, and caches cover art.
+    private func runSync() async {
+        guard let client = ClientBox.shared.client else { return }
+        sync = SyncProgress(phase: "Álbumes y artistas", fraction: nil)
+        defer { sync = nil }
+        do {
+            // 1. Collections.
+            async let a = client.albums()
+            async let r = client.artists()
+            async let p = client.playlists()
+            let (newAlbums, newArtists, newPlaylists) = try await (a, r, p)
+            try Task.checkCancellation()
+            albums = newAlbums
+            artists = newArtists
+            playlists = newPlaylists
+            save()
+
+            // 2. Every track, grouped into album tracklists.
+            sync = SyncProgress(phase: "Canciones", fraction: 0)
+            let all = try await client.allTracks { @MainActor [weak self] loaded, total in
+                self?.sync = SyncProgress(phase: "Canciones (\(loaded) de \(total))",
+                                          fraction: total > 0 ? Double(loaded) / Double(total) : nil)
+            }
+            var byAlbum: [String: [BaseItem]] = [:]
+            for t in all {
+                if let id = t.albumId { byAlbum[id, default: []].append(t) }
+            }
+            for k in byAlbum.keys { byAlbum[k]?.sort(by: BaseItem.trackOrder) }
+
+            // 3. Playlist tracklists.
+            var byPlaylist: [String: [BaseItem]] = [:]
+            for (i, pl) in newPlaylists.enumerated() {
+                try Task.checkCancellation()
+                sync = SyncProgress(phase: "Playlists (\(i + 1) de \(newPlaylists.count))",
+                                    fraction: Double(i) / Double(max(newPlaylists.count, 1)))
+                if let t = try? await client.tracks(playlistId: pl.id) { byPlaylist[pl.id] = t }
+            }
+            try Task.checkCancellation()
+            tracksByAlbum = byAlbum.merging(byPlaylist) { a, _ in a }
+            save()
+
+            // 4. Downloads follow the server.
+            var added = 0, removed = 0
+            if let downloads {
+                sync = SyncProgress(phase: "Descargas", fraction: nil)
+                for id in downloads.syncedAlbumIds {
+                    if let album = self.album(id: id), let t = byAlbum[id] {
+                        added += downloads.syncAlbum(album, tracks: t)
+                    }
+                }
+                for id in downloads.syncedPlaylistIds {
+                    if let pl = newPlaylists.first(where: { $0.id == id }), let t = byPlaylist[id] {
+                        let r = downloads.syncPlaylist(pl, tracks: t)
+                        added += r.added
+                        removed += r.removed
+                    }
+                }
+            }
+
+            // 5. Cover art for offline browsing.
+            if UserDefaults.standard.object(forKey: AppSettings.syncArtworkKey) as? Bool ?? true {
+                let ids = (newAlbums + newPlaylists + newArtists)
+                    .filter { $0.imageTags?["Primary"] != nil }
+                    .map(\.id)
+                try await prefetchArtwork(ids)
+            }
+
+            let now = Date()
+            lastSync = now
+            UserDefaults.standard.set(now, forKey: AppSettings.lastSyncKey)
+            var summary = "\(newAlbums.count) álbumes · \(all.count) canciones · \(newPlaylists.count) playlists"
+            if added > 0 { summary += " · \(added) descargas nuevas" }
+            if removed > 0 { summary += " · \(removed) quitadas" }
+            lastSyncSummary = summary
+            lastError = nil
+        } catch is CancellationError {
+            // User cancelled.
+        } catch {
+            if !Task.isCancelled { lastError = error.localizedDescription }
+        }
+    }
+
+    private func prefetchArtwork(_ ids: [String]) async throws {
+        guard !ids.isEmpty else { return }
+        let total = ids.count
+        var done = 0
+        sync = SyncProgress(phase: "Portadas (0 de \(total))", fraction: 0)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            var next = 0
+            while next < min(6, total) {
+                let id = ids[next]; next += 1
+                group.addTask { await ArtworkCache.shared.prefetch(id, size: ArtworkSize.small) }
+            }
+            while try await group.next() != nil {
+                try Task.checkCancellation()
+                done += 1
+                if done % 10 == 0 || done == total {
+                    sync = SyncProgress(phase: "Portadas (\(done) de \(total))",
+                                        fraction: Double(done) / Double(total))
+                }
+                if next < total {
+                    let id = ids[next]; next += 1
+                    group.addTask { await ArtworkCache.shared.prefetch(id, size: ArtworkSize.small) }
+                }
+            }
         }
     }
 
