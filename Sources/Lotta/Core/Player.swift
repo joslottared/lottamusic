@@ -31,6 +31,8 @@ final class Player: ObservableObject {
 
     weak var downloads: DownloadManager?
     var isOnline: () -> Bool = { true }
+    /// A stream failed: the server may have gone away.
+    var onStreamFailure: () -> Void = {}
 
     private let player = AVPlayer()
     private var timeObserver: Any?
@@ -272,6 +274,7 @@ final class Player: ObservableObject {
                     guard let self, self.player.currentItem === it else { return }
                     self.errorMessage = message
                     self.isPlaying = false
+                    self.onStreamFailure()
                 }
             case .readyToPlay where resumeAt > 1:
                 Task { @MainActor in

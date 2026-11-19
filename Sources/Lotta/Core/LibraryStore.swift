@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import Network
+import UIKit
 
 /// Library metadata, cached on disk so the app can be browsed offline.
 @MainActor
@@ -62,6 +63,16 @@ final class LibraryStore: ObservableObject {
         UserDefaults.standard.removeObject(forKey: AppSettings.lastSyncKey)
     }
 
+    /// A server whose music drive is unplugged or still scanning can answer
+    /// with an empty or partial library. That must never replace what we know
+    /// (or touch downloads).
+    private func looksIncomplete(_ newAlbums: [BaseItem]) -> Bool {
+        if albums.count < 10 { return newAlbums.isEmpty && !albums.isEmpty }
+        return newAlbums.count < albums.count / 2
+    }
+
+    static let incompleteMessage = "El servidor respondió con una biblioteca vacía o incompleta (¿disco desconectado o escaneando?). No se cambió nada."
+
     func refresh() async {
         guard let client = ClientBox.shared.client, !isRefreshing else { return }
         isRefreshing = true
@@ -70,6 +81,10 @@ final class LibraryStore: ObservableObject {
             async let a = client.albums()
             async let r = client.artists()
             let (newAlbums, newArtists) = try await (a, r)
+            if looksIncomplete(newAlbums) {
+                lastError = Self.incompleteMessage
+                return
+            }
             albums = newAlbums
             artists = newArtists
             playlists = (try? await client.playlists()) ?? playlists
@@ -103,7 +118,7 @@ final class LibraryStore: ObservableObject {
     /// Auto sync on launch, at most once a day.
     func autoSyncIfNeeded() {
         let d = UserDefaults.standard
-        guard d.object(forKey: AppSettings.autoSyncKey) as? Bool ?? true else { return }
+        guard d.object(forKey: AppSettings.autoSyncKey) as? Bool ?? false else { return }
         if let last = lastSync, Date().timeIntervalSince(last) < 24 * 3600 { return }
         startSync()
     }
@@ -122,6 +137,10 @@ final class LibraryStore: ObservableObject {
             async let p = client.playlists()
             let (newAlbums, newArtists, newPlaylists) = try await (a, r, p)
             try Task.checkCancellation()
+            if looksIncomplete(newAlbums) {
+                lastError = Self.incompleteMessage
+                return
+            }
             albums = newAlbums
             artists = newArtists
             playlists = newPlaylists
@@ -370,16 +389,213 @@ final class LibraryStore: ObservableObject {
     }
 }
 
+/// "Online" means the Jellyfin server answers, not just that there's a
+/// network: with the server off (or away from home) the app behaves offline
+/// and lives on downloads. If the server's LAN address changed (new IP from
+/// the router), it's found again on the same subnet.
 @MainActor
 final class NetworkMonitor: ObservableObject {
-    @Published private(set) var isOnline = true
+    @Published private(set) var hasNetwork = true
+    @Published private(set) var serverReachable = true
+    @Published private(set) var checking = false
+
+    var isOnline: Bool { hasNetwork && serverReachable }
+
+    /// Called when the server was found at a new address.
+    var onServerMoved: ((URL) -> Void)?
+
     private let monitor = NWPathMonitor()
+    private var onWifi = false
+    private var searchedThisNetwork = false
+    private var checkTask: Task<Void, Never>?
+    private var retryTask: Task<Void, Never>?
 
     init() {
         monitor.pathUpdateHandler = { [weak self] path in
-            let online = path.status == .satisfied
-            Task { @MainActor in self?.isOnline = online }
+            let ok = path.status == .satisfied
+            let wifi = path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
+            Task { @MainActor in
+                guard let self else { return }
+                self.hasNetwork = ok
+                self.onWifi = wifi
+                self.searchedThisNetwork = false
+                self.check()
+            }
         }
         monitor.start(queue: DispatchQueue(label: "lotta.network"))
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.check() }
+        }
+    }
+
+    /// Re-checks the server now (network change, app foregrounded, after login…).
+    func check() {
+        checkTask?.cancel()
+        checkTask = Task { await runCheck() }
+    }
+
+    private func runCheck() async {
+        guard hasNetwork, let base = ClientBox.shared.client?.creds.serverURL else {
+            return setReachable(false)
+        }
+        checking = true
+        defer { checking = false }
+        if await ServerProbe.matches(base) { return setReachable(true) }
+        guard !Task.isCancelled else { return }
+        // Only look around once per network, and only on Wi-Fi/LAN.
+        if onWifi && !searchedThisNetwork {
+            searchedThisNetwork = true
+            if let found = await ServerProbe.find(movedFrom: base), !Task.isCancelled {
+                onServerMoved?(found)
+                return setReachable(true)
+            }
+        }
+        guard !Task.isCancelled else { return }
+        setReachable(false)
+    }
+
+    private func setReachable(_ ok: Bool) {
+        if serverReachable != ok { serverReachable = ok }
+        retryTask?.cancel()
+        guard !ok, hasNetwork else { return }
+        // Server off: look again every 30 s (cheap: one request).
+        retryTask = Task {
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled else { return }
+            check()
+        }
+    }
+}
+
+/// Talks to /System/Info/Public (no login needed) to tell whether an address
+/// is *our* server — matched by its server id, so another Jellyfin on some
+/// other network is never mistaken for it.
+enum ServerProbe {
+    private struct Info: Decodable {
+        let Id: String
+        let LocalAddress: String?
+    }
+
+    private static let idKey = "lotta.server.id"
+    private static let addressesKey = "lotta.server.addresses"
+
+    static var serverId: String? {
+        get { UserDefaults.standard.string(forKey: idKey) }
+        set { UserDefaults.standard.set(newValue, forKey: idKey) }
+    }
+
+    /// Addresses where the server has answered before (plus the one it reports).
+    static var knownAddresses: [URL] {
+        get { (UserDefaults.standard.stringArray(forKey: addressesKey) ?? []).compactMap(URL.init(string:)) }
+        set { UserDefaults.standard.set(Array(newValue.map(\.absoluteString).prefix(8)), forKey: addressesKey) }
+    }
+
+    static func forget() {
+        UserDefaults.standard.removeObject(forKey: idKey)
+        UserDefaults.standard.removeObject(forKey: addressesKey)
+    }
+
+    private static func session(timeout: TimeInterval) -> URLSession {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = timeout
+        cfg.timeoutIntervalForResource = timeout + 1
+        cfg.waitsForConnectivity = false
+        return URLSession(configuration: cfg)
+    }
+
+    private static func info(_ base: URL, session: URLSession) async -> Info? {
+        guard let (data, resp) = try? await session.data(from: base.appendingPathComponent("System/Info/Public")),
+              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return try? JSONDecoder().decode(Info.self, from: data)
+    }
+
+    /// Whether `base` answers as our server. Remembers the server id the first
+    /// time and every address that worked.
+    static func matches(_ base: URL, timeout: TimeInterval = 4) async -> Bool {
+        let s = session(timeout: timeout)
+        defer { s.finishTasksAndInvalidate() }
+        guard let i = await info(base, session: s) else { return false }
+        if let id = serverId, id != i.Id { return false }
+        serverId = i.Id
+        var known = knownAddresses.filter { $0 != base }
+        known.insert(base, at: 0)
+        if let local = i.LocalAddress.flatMap(URL.init(string:)), !known.contains(local) { known.append(local) }
+        knownAddresses = known
+        return true
+    }
+
+    /// Looks for the server after its address stopped answering: first the
+    /// addresses it used before, then — if it was on this same home subnet —
+    /// every host of that subnet on the same port (the router gave it a new IP).
+    static func find(movedFrom old: URL) async -> URL? {
+        guard serverId != nil else { return nil } // can't verify without the id
+        for url in knownAddresses where url != old {
+            if await matches(url, timeout: 2) { return url }
+        }
+        guard let host = old.host, let oldIP = IPv4(host), oldIP.isPrivate,
+              let mine = IPv4.wifiAddress(), mine.subnet24 == oldIP.subnet24 else { return nil }
+
+        let scheme = old.scheme ?? "http"
+        let port = old.port.map { ":\($0)" } ?? ""
+        let path = old.path == "/" ? "" : old.path
+        let candidates = (1...254).filter { $0 != mine.last && $0 != oldIP.last }.compactMap {
+            URL(string: "\(scheme)://\(mine.subnet24).\($0)\(port)\(path)")
+        }
+        let s = session(timeout: 1.2)
+        defer { s.invalidateAndCancel() }
+        let id = serverId
+        return await withTaskGroup(of: URL?.self) { group in
+            var next = 0
+            func add() {
+                guard next < candidates.count else { return }
+                let url = candidates[next]; next += 1
+                group.addTask { await info(url, session: s)?.Id == id ? url : nil }
+            }
+            for _ in 0..<32 { add() }
+            while let result = await group.next() {
+                if let url = result {
+                    group.cancelAll()
+                    _ = await matches(url) // remember it
+                    return url
+                }
+                add()
+            }
+            return nil
+        }
+    }
+}
+
+/// Minimal IPv4 helper for the subnet search.
+struct IPv4 {
+    let octets: [UInt8]
+
+    init?(_ s: String) {
+        let parts = s.split(separator: ".").compactMap { UInt8($0) }
+        guard parts.count == 4 else { return nil }
+        octets = parts
+    }
+
+    var subnet24: String { octets.prefix(3).map(String.init).joined(separator: ".") }
+    var last: Int { Int(octets[3]) }
+    var isPrivate: Bool {
+        octets[0] == 10 || (octets[0] == 192 && octets[1] == 168) || (octets[0] == 172 && (16...31).contains(octets[1]))
+    }
+
+    /// The phone's Wi-Fi IPv4 address (interface en0).
+    static func wifiAddress() -> IPv4? {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0, let first = list else { return nil }
+        defer { freeifaddrs(list) }
+        for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let ifa = p.pointee
+            guard let addr = ifa.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET),
+                  String(cString: ifa.ifa_name) == "en0" else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(addr, socklen_t(addr.pointee.sa_len), &host, socklen_t(host.count),
+                              nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            return IPv4(String(cString: host))
+        }
+        return nil
     }
 }

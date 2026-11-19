@@ -2,11 +2,25 @@ import Photos
 import PhotosUI
 import SwiftUI
 
+/// Lines picked for a lyric card, with their timing when the lyrics are synced.
+struct LyricsSelection {
+    var lines: [String]
+    /// Song time where the first selected line starts (synced lyrics only).
+    var start: Double?
+    /// Seconds from the first selected line to each line (synced lyrics only).
+    var offsets: [Double]?
+    /// Fragment length in seconds: until the next line starts (last line held ≤ 5 s).
+    var duration: Double?
+
+    static let maxVideoDuration: Double = 20
+    var canAnimate: Bool { offsets != nil && (duration ?? .infinity) <= Self.maxVideoDuration }
+}
+
 /// Synced lyrics with Spotify/Apple Music-style line selection for sharing.
 struct LyricsView: View {
     let lyrics: Lyrics?
     let loaded: Bool
-    var onShare: ([String]) -> Void
+    var onShare: (LyricsSelection) -> Void
 
     @EnvironmentObject private var player: Player
     @State private var selecting = false
@@ -25,9 +39,9 @@ struct LyricsView: View {
             VStack(spacing: 10) {
                 Image(systemName: "quote.bubble").font(.largeTitle)
                 Text("Esta canción no tiene letra").font(.headline)
-                Text(AppSettings.lrclibEnabled
-                     ? "No está en tu servidor ni en LRCLIB. Puedes agregar un archivo .lrc con el mismo nombre que la canción en Jellyfin."
-                     : "Agrega un archivo .lrc con el mismo nombre que la canción en tu servidor Jellyfin, o activa LRCLIB en Ajustes.")
+                Text(AppSettings.lrclibEnabled || AppSettings.neteaseEnabled
+                     ? "No se encontró en tu servidor ni en las bases de letras. Puedes agregar un archivo .lrc con el mismo nombre que la canción en Jellyfin."
+                     : "Agrega un archivo .lrc con el mismo nombre que la canción en tu servidor Jellyfin, o activa LRCLIB/NetEase en Ajustes.")
                     .font(.footnote)
                     .multilineTextAlignment(.center)
                     .opacity(0.6)
@@ -176,9 +190,19 @@ struct LyricsView: View {
         Button {
             guard let r = selected else { return }
             // Song order; instrumental "♪" gaps inside the block are skipped.
-            let lines = lyrics.lines.filter { r.contains($0.id) && !$0.text.isEmpty }.map(\.text)
-            guard !lines.isEmpty else { return }
-            onShare(lines)
+            let picked = lyrics.lines.filter { r.contains($0.id) && !$0.text.isEmpty }
+            guard !picked.isEmpty else { return }
+            var selection = LyricsSelection(lines: picked.map(\.text))
+            let starts = picked.compactMap(\.start)
+            if lyrics.isSynced, starts.count == picked.count, let t0 = starts.first, let last = starts.last {
+                let next = lyrics.lines.dropFirst(r.upperBound + 1).first { $0.start != nil }?.start
+                let songEnd = player.duration > 0 ? player.duration : last + 5
+                let end = min(next ?? songEnd, last + 5)
+                selection.start = t0
+                selection.offsets = starts.map { $0 - t0 }
+                selection.duration = max(end - t0, last - t0 + 1.5)
+            }
+            onShare(selection)
             withAnimation { selecting = false; selected = nil }
         } label: {
             Label("Compartir", systemImage: "square.and.arrow.up")
@@ -214,8 +238,9 @@ enum CardStyle: String, CaseIterable, Identifiable {
 }
 
 /// What to draw: everything, or (for video export) only the card on a
-/// transparent canvas / only the card's shape as a mask.
-enum CardLayer { case full, overlay, mask }
+/// transparent canvas / only the card's shape as a mask / only what's behind
+/// the card (canvas plus the frosted-photo region) for still backgrounds.
+enum CardLayer { case full, overlay, mask, background }
 
 /// 9:16 image, story-ready. Rendered with ImageRenderer, so it takes images
 /// as UIImage (async views would render empty) and avoids system materials
@@ -235,6 +260,12 @@ struct LyricsCard: View {
     var cardOffset: CGSize = .zero
     var width: CGFloat = 360
     var layer: CardLayer = .full
+    /// Per-line opacity for animated lyrics (nil = all lines fully visible).
+    /// Hidden lines keep their space so the card never changes size.
+    var lineOpacities: [Double]? = nil
+    /// Animated mode: the card is one line tall (the tallest line) and lines
+    /// replace each other in place.
+    var singleLine = false
     /// Live preview over video: frosted glass with a real material.
     var liveGlass = false
 
@@ -281,6 +312,11 @@ struct LyricsCard: View {
             case .mask:
                 Color.clear
                 cardShapeMask
+            case .background:
+                canvas
+                if isGlass, let photo {
+                    FillImage(image: photo, blur: 15 * s).mask { cardShapeMask }
+                }
             }
         }
         .frame(width: width, height: width * 16 / 9)
@@ -332,14 +368,30 @@ struct LyricsCard: View {
                 }
             }
 
-            Text(lines.joined(separator: "\n"))
-                .font(.system(size: (lines.count > 4 ? 22 : 26) * k, weight: .heavy))
-                .lineSpacing(4 * k)
-                .fixedSize(horizontal: false, vertical: true)
+            Group {
+                if singleLine {
+                    ZStack(alignment: .leading) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { i, line in lyricLine(line, i) }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 4 * k) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { i, line in lyricLine(line, i) }
+                    }
+                }
+            }
+            .font(.system(size: (singleLine || lines.count <= 4 ? 26 : 22) * k, weight: .heavy))
         }
         .foregroundStyle(foreground)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(22 * k)
+    }
+
+    private func lyricLine(_ line: String, _ i: Int) -> some View {
+        Text(line)
+            .lineSpacing(4 * k)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .opacity(lineOpacities.map { $0.indices.contains(i) ? $0[i] : 1 } ?? 1)
     }
 
     private var card: some View {
@@ -388,8 +440,10 @@ private struct FillImage: View {
 }
 
 struct LyricsShareView: View {
+    @EnvironmentObject private var downloads: DownloadManager
     let item: BaseItem
-    let lines: [String]
+    let selection: LyricsSelection
+    private var lines: [String] { selection.lines }
 
     @Environment(\.dismiss) private var dismiss
     @State private var style: CardStyle = .color
@@ -410,14 +464,51 @@ struct LyricsShareView: View {
     @State private var toast: String?
     // Video style
     @State private var videoURL: URL?
+    @State private var videoLength: Double = 0
+    /// Where the used part of the gallery video starts (seconds).
+    @State private var videoStart: Double = 0
+    /// Same as videoStart, but only updated when a drag ends (drives the preview).
+    @State private var committedStart: Double = 0
     @State private var pickingVideo = false
     @State private var loadingMedia = false
     @State private var exporting = false
     @State private var exported: ExportedVideo?
     @State private var shareFile: ShareableFile?
+    // Animated lyrics (lines appear at their synced time)
+    @State private var animated = false
+    @State private var animationStart = Date()
+    @State private var withSong = true
+    @State private var song: (url: URL, temporary: Bool)?
+    @State private var exportPhase = "Creando video…"
+    @State private var exportTask: Task<Void, Never>?
+
+    private var timeline: LyricTimeline? {
+        guard let offsets = selection.offsets, let duration = selection.duration else { return nil }
+        return LyricTimeline(offsets: offsets, duration: duration)
+    }
+
+    /// How much of the gallery video is used: the lyric fragment when
+    /// animated, otherwise up to 15 s.
+    private var clipLength: Double {
+        let wanted = animated ? (timeline?.duration ?? VideoCardExporter.maxDuration) : VideoCardExporter.maxDuration
+        return videoLength > 0 ? min(wanted, videoLength) : wanted
+    }
+
+    /// Keeps the chosen part inside the video when the clip length changes.
+    private func clampVideoStart() {
+        let maxStart = max(0, videoLength - clipLength)
+        if videoStart > maxStart { videoStart = maxStart }
+        committedStart = videoStart
+    }
+
+    /// Result is a video: video background and/or animated lyrics.
+    private var makesVideo: Bool { style == .video || animated }
 
     private struct ExportedVideo {
-        struct Key: Equatable { let video: URL; let scale: CGFloat; let offset: CGSize }
+        struct Key: Equatable {
+            let style: CardStyle; let video: URL?; let videoStart: Double; let photo: Int?
+            let scale: CGFloat; let offset: CGSize; let animated: Bool; let withSong: Bool
+        }
         let key: Key
         let url: URL
     }
@@ -450,10 +541,15 @@ struct LyricsShareView: View {
 
                 if style == .video {
                     VStack(spacing: 6) {
-                        Text(videoURL == nil ? "Videos de máximo 15 segundos"
-                                             : "Pellizca para cambiar el tamaño · arrastra para moverla")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        if let videoURL, videoLength > clipLength + 0.5 {
+                            VideoTrimmer(url: videoURL, videoLength: videoLength, clipLength: clipLength,
+                                         start: $videoStart) { committedStart = videoStart }
+                        } else {
+                            Text(videoURL == nil ? "Si el video es largo, eliges qué parte usar"
+                                                 : "Pellizca para cambiar el tamaño · arrastra para moverla")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         Button { openPicker(video: true) } label: {
                             if loadingMedia {
                                 ProgressView()
@@ -480,7 +576,9 @@ struct LyricsShareView: View {
                     }
                 }
 
-                if style == .video {
+                if selection.offsets != nil { animationToggle }
+
+                if makesVideo {
                     videoButtons
                 } else {
                 HStack(spacing: 12) {
@@ -551,7 +649,9 @@ struct LyricsShareView: View {
                 ShareSheet(items: [file.url]).presentationDetents([.medium, .large])
             }
             .onDisappear {
-                for url in [videoURL, exported?.url].compactMap({ $0 }) {
+                exportTask?.cancel() // stop a render nobody will see
+                let tempSong = song?.temporary == true ? song?.url : nil
+                for url in [videoURL, exported?.url, tempSong].compactMap({ $0 }) {
                     try? FileManager.default.removeItem(at: url)
                 }
             }
@@ -562,38 +662,80 @@ struct LyricsShareView: View {
     static let previewWidth: CGFloat = 250
 
     @ViewBuilder private var preview: some View {
+        if animated, let timeline {
+            // Plays the fragment on a loop (with a short pause at the end).
+            TimelineView(.animation) { ctx in
+                let t = ctx.date.timeIntervalSince(animationStart)
+                    .truncatingRemainder(dividingBy: timeline.duration + 0.8)
+                previewCard(opacities: timeline.opacities(at: min(t, timeline.duration)))
+            }
+        } else {
+            previewCard(opacities: nil)
+        }
+    }
+
+    @ViewBuilder private func previewCard(opacities: [Double]?) -> some View {
         if style == .video, let videoURL {
             ZStack {
-                LoopingVideoView(url: videoURL)
-                card(width: Self.previewWidth, live: true, layer: .overlay, liveGlass: true)
+                LoopingVideoView(url: videoURL, range: committedStart...(committedStart + clipLength))
+                card(width: Self.previewWidth, live: true, layer: .overlay, liveGlass: true,
+                     opacities: opacities)
             }
             .frame(width: Self.previewWidth, height: Self.previewWidth * 16 / 9)
         } else {
-            card(width: Self.previewWidth, live: true)
+            card(width: Self.previewWidth, live: true, opacities: opacities)
+        }
+    }
+
+    private var animationToggle: some View {
+        VStack(spacing: 4) {
+            Toggle(isOn: $animated) {
+                Label("Letra animada", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    .font(.subheadline.weight(.medium))
+            }
+            .disabled(!selection.canAnimate)
+            .onChange(of: animated) { _, on in
+                if on { animationStart = Date() }
+                clampVideoStart()
+            }
+            if animated {
+                Toggle(isOn: $withSong) {
+                    Label("Con el audio de la canción", systemImage: "music.note")
+                        .font(.subheadline.weight(.medium))
+                }
+            }
+            let seconds = Int((selection.duration ?? 0).rounded(.up))
+            Text(selection.canAnimate
+                 ? "Una línea a la vez, al ritmo de la canción · video de \(seconds) s"
+                 : "El fragmento dura \(seconds) s. Selecciona menos líneas (máximo \(Int(LyricsSelection.maxVideoDuration)) s).")
+                .font(.caption)
+                .foregroundStyle(selection.canAnimate ? Color.secondary : Color.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     /// Size/position only apply to photo/video styles; `live` adds the in-flight gesture.
     private func card(width: CGFloat, live: Bool = false, layer: CardLayer = .full,
-                      liveGlass: Bool = false) -> LyricsCard {
+                      liveGlass: Bool = false, opacities: [Double]? = nil) -> LyricsCard {
         let movable = style.isMedia
         return LyricsCard(title: item.title, artist: item.trackArtist, lines: lines,
                           artwork: artwork, baseColor: baseColor, style: style, photo: photo,
                           cardScale: movable ? (live ? liveScale : cardScale) : 1,
                           cardOffset: movable ? (live ? liveOffset : cardOffset) : .zero,
-                          width: width, layer: layer, liveGlass: liveGlass)
+                          width: width, layer: layer, lineOpacities: opacities, singleLine: animated,
+                          liveGlass: liveGlass)
     }
 
     private var videoButtons: some View {
         HStack(spacing: 12) {
             Button {
-                Task { if let url = await exportVideo() { shareFile = ShareableFile(url: url) } }
+                exportTask = Task { if let url = await exportVideo() { shareFile = ShareableFile(url: url) } }
             } label: {
                 Label("Compartir", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             Button {
-                Task {
+                exportTask = Task {
                     guard let url = await exportVideo() else { return }
                     let ok = await PhotoSaver.saveVideo(url)
                     await showToast(ok ? "Video guardado en Fotos" : "Permite el acceso a Fotos en Ajustes")
@@ -604,12 +746,12 @@ struct LyricsShareView: View {
             .buttonStyle(.bordered)
         }
         .controlSize(.large)
-        .disabled(videoURL == nil || exporting)
+        .disabled((style == .video && videoURL == nil) || exporting)
         .overlay {
             if exporting {
                 HStack(spacing: 8) {
                     ProgressView()
-                    Text("Creando video…").font(.subheadline.weight(.medium))
+                    Text(exportPhase).font(.subheadline.weight(.medium))
                 }
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .background(.regularMaterial, in: Capsule())
@@ -722,28 +864,61 @@ struct LyricsShareView: View {
             return
         }
         let seconds = await VideoCardExporter.duration(of: movie.url) ?? .infinity
-        // Small tolerance: "15 s" clips are often 15.0x s long.
-        guard seconds <= VideoCardExporter.maxDuration + 0.5 else {
+        guard seconds <= VideoCardExporter.maxSourceDuration else {
             try? FileManager.default.removeItem(at: movie.url)
             if videoURL == nil { style = .color }
-            let shown = seconds.isFinite ? "dura \(Int(seconds.rounded())) s" : "no se pudo leer"
-            await showToast("Ese video \(shown). Elige uno de máximo 15 s")
+            await showToast(seconds.isFinite ? "Ese video es muy largo. Elige uno de máximo 5 min"
+                                             : "No se pudo leer el video")
             return
         }
         if let old = videoURL { try? FileManager.default.removeItem(at: old) }
+        videoLength = seconds
+        videoStart = 0
+        committedStart = 0
         videoURL = movie.url
     }
 
-    /// Renders the MP4 for the current video/size/position (reused if nothing changed).
+    /// Renders the MP4 for the current look (reused if nothing changed).
     private func exportVideo() async -> URL? {
-        guard let videoURL else { return nil }
-        let key = ExportedVideo.Key(video: videoURL, scale: cardScale, offset: cardOffset)
+        if style == .video && videoURL == nil { return nil }
+        let key = ExportedVideo.Key(style: style, video: style == .video ? videoURL : nil, videoStart: videoStart,
+                                    photo: photo.map { ObjectIdentifier($0).hashValue },
+                                    scale: cardScale, offset: cardOffset, animated: animated,
+                                    withSong: animated && withSong)
         if let exported, exported.key == key { return exported.url }
-        guard let overlay = renderLayer(.overlay), let mask = renderLayer(.mask) else { return nil }
         exporting = true
         defer { exporting = false }
         do {
-            let url = try await VideoCardExporter.export(video: videoURL, overlay: overlay, mask: mask, blur: 34)
+            let url: URL
+            if animated, let timeline {
+                // One overlay per step: nothing, line 1, lines 1-2 (1 dimmed)…
+                let states = (0...lines.count).compactMap { renderLayer(.overlay, opacities: timeline.state($0)) }
+                let background: CardVideoWriter.Background
+                if style == .video, let videoURL, let mask = renderLayer(.mask) {
+                    background = .video(videoURL, start: videoStart, mask: mask, blur: 34)
+                } else if let still = renderLayer(.background) {
+                    background = .still(still)
+                } else { return nil }
+                var audio: (url: URL, start: Double)?
+                if withSong, let start = selection.start {
+                    if song == nil {
+                        exportPhase = "Obteniendo la canción…"
+                        song = try? await SongAudio.file(for: item, downloads: downloads)
+                    }
+                    if let song { audio = (song.url, start) }
+                    else { await showToast("No se pudo obtener la canción; el video va sin audio") }
+                }
+                exportPhase = "Creando video…"
+                url = try await CardVideoWriter.write(background: background, states: states,
+                                                      timeline: timeline, audio: audio) { p in
+                    exportPhase = "Creando video… \(Int(p * 100))%"
+                }
+            } else if let videoURL, let overlay = renderLayer(.overlay), let mask = renderLayer(.mask) {
+                url = try await VideoCardExporter.export(video: videoURL, start: videoStart, length: clipLength,
+                                                         overlay: overlay, mask: mask, blur: 34)
+            } else {
+                return nil
+            }
             if let old = exported?.url { try? FileManager.default.removeItem(at: old) }
             exported = ExportedVideo(key: key, url: url)
             return url
@@ -753,8 +928,8 @@ struct LyricsShareView: View {
         }
     }
 
-    private func renderLayer(_ layer: CardLayer) -> UIImage? {
-        let renderer = ImageRenderer(content: card(width: 360, layer: layer))
+    private func renderLayer(_ layer: CardLayer, opacities: [Double]? = nil) -> UIImage? {
+        let renderer = ImageRenderer(content: card(width: 360, layer: layer, opacities: opacities))
         renderer.scale = 3 // 1080 × 1920
         renderer.isOpaque = false
         return renderer.uiImage

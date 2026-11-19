@@ -48,7 +48,9 @@ struct LibraryView: View {
                 }
 
                 if !network.isOnline {
-                    Label("Sin conexión · mostrando tus descargas", systemImage: "wifi.slash")
+                    Label(network.hasNetwork ? "Servidor no disponible · mostrando tus descargas"
+                                             : "Sin conexión · mostrando tus descargas",
+                          systemImage: network.hasNetwork ? "server.rack" : "wifi.slash")
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(.secondary)
                 } else if let err = library.lastError, library.albums.isEmpty {
@@ -455,9 +457,10 @@ struct SettingsView: View {
     @EnvironmentObject private var downloads: DownloadManager
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var network: NetworkMonitor
-    @AppStorage(AppSettings.autoSyncKey) private var autoSync = true
+    @AppStorage(AppSettings.autoSyncKey) private var autoSync = false
     @AppStorage(AppSettings.syncArtworkKey) private var syncArtwork = true
     @AppStorage(AppSettings.lrclibKey) private var lrclib = true
+    @AppStorage(AppSettings.neteaseKey) private var netease = true
     @Environment(\.dismiss) private var dismiss
     @AppStorage(AppSettings.streamQualityKey) private var streamQuality: AudioQuality = .original
     @AppStorage(AppSettings.downloadQualityKey) private var downloadQuality: AudioQuality = .original
@@ -525,10 +528,14 @@ struct SettingsView: View {
                         .onChange(of: lrclib) { _, on in
                             if on { Task { await LyricsStore.shared.forgetMissing() } }
                         }
+                    Toggle("Buscar también en NetEase", isOn: $netease)
+                        .onChange(of: netease) { _, on in
+                            if on { Task { await LyricsStore.shared.forgetMissing() } }
+                        }
                 } header: {
                     Text("Letras")
                 } footer: {
-                    Text("Si tu servidor no tiene la letra de una canción, Lotta la busca en lrclib.net, una base de letras gratuita. Se envían el título, artista, álbum y duración de la canción.")
+                    Text("Si tu servidor no tiene la letra, Lotta la busca primero en lrclib.net (base de letras gratuita) y luego en NetEase Cloud Music (catálogo enorme; servicio no oficial con servidores en China). Se envían el título, artista, álbum y duración de la canción.")
                 }
 
                 Section("Almacenamiento") {
@@ -552,11 +559,17 @@ struct SettingsView: View {
             .confirmationDialog("¿Eliminar todas las descargas?", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("Eliminar", role: .destructive) { downloads.deleteAll() }
             }
-            .confirmationDialog("Se borrarán también tus descargas.", isPresented: $confirmLogout, titleVisibility: .visible) {
-                Button("Cerrar sesión", role: .destructive) {
+            .confirmationDialog("¿Qué hacemos con tus descargas?", isPresented: $confirmLogout, titleVisibility: .visible) {
+                Button("Cerrar sesión y conservarlas") {
                     dismiss()
-                    model.logout()
+                    model.logout(keepDownloads: true)
                 }
+                Button("Cerrar sesión y borrarlas", role: .destructive) {
+                    dismiss()
+                    model.logout(keepDownloads: false)
+                }
+            } message: {
+                Text("Si las conservas, siguen en el teléfono cuando vuelvas a entrar a tu servidor.")
             }
         }
     }

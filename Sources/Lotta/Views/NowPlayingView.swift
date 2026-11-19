@@ -5,7 +5,7 @@ private enum NowPlayingPanel { case artwork, lyrics, queue }
 struct ShareRequest: Identifiable {
     let id = UUID()
     let item: BaseItem
-    let lines: [String]
+    let selection: LyricsSelection
 }
 
 struct NowPlayingView: View {
@@ -103,8 +103,8 @@ struct NowPlayingView: View {
                             .contentShape(Rectangle())
                             .gesture(playerDrag)
                     case .lyrics:
-                        LyricsView(lyrics: lyrics, loaded: lyricsLoaded) { lines in
-                            if let item { share = ShareRequest(item: item, lines: lines) }
+                        LyricsView(lyrics: lyrics, loaded: lyricsLoaded) { selection in
+                            if let item { share = ShareRequest(item: item, selection: selection) }
                         }
                     case .queue:
                         QueueView()
@@ -134,7 +134,7 @@ struct NowPlayingView: View {
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
         .sheet(item: $share) { req in
-            LyricsShareView(item: req.item, lines: req.lines)
+            LyricsShareView(item: req.item, selection: req.selection)
         }
         .sheet(item: $addToPlaylist) { item in
             AddToPlaylistView(tracks: [item])

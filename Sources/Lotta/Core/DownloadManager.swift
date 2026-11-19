@@ -254,6 +254,10 @@ final class DownloadManager: NSObject, ObservableObject {
         guard playlistInfo[playlist.id] != nil else { return (0, 0) }
         let old = playlistTracks[playlist.id] ?? []
         let newIds = Set(tracks.map(\.id))
+        // Safety: an empty answer, or one that drops most of the playlist, is
+        // more likely a server hiccup than a real edit — leave it untouched.
+        let dropping = old.filter { !newIds.contains($0) }.count
+        if tracks.isEmpty || (old.count >= 4 && dropping > old.count / 2) { return (0, 0) }
         refreshMetadata(tracks)
         let added = tracks.filter { downloaded[$0.id] == nil && pending[$0.id] == nil }.count
         download(tracks, playlist: playlist)

@@ -143,6 +143,12 @@ enum AppSettings {
         UserDefaults.standard.object(forKey: lrclibKey) as? Bool ?? true
     }
 
+    static let neteaseKey = "lotta.lyrics.netease"
+
+    static var neteaseEnabled: Bool {
+        UserDefaults.standard.object(forKey: neteaseKey) as? Bool ?? true
+    }
+
     static var streamQuality: AudioQuality {
         AudioQuality(rawValue: UserDefaults.standard.string(forKey: streamQualityKey) ?? "") ?? .original
     }

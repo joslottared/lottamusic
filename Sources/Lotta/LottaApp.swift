@@ -22,6 +22,18 @@ final class AppModel: ObservableObject {
         library.downloads = downloads
         player.downloads = downloads
         player.isOnline = { [weak self] in self?.network.isOnline ?? true }
+        network.onServerMoved = { [weak self] url in self?.serverMoved(to: url) }
+        player.onStreamFailure = { [weak self] in self?.network.check() }
+        downloads.start()
+    }
+
+    /// The server answered at a new LAN address: keep the same session there.
+    private func serverMoved(to url: URL) {
+        guard var c = creds, c.serverURL != url else { return }
+        c.serverURL = url
+        CredentialStore.save(c)
+        ClientBox.shared.client = JellyfinClient(creds: c)
+        creds = c
         downloads.start()
     }
 
@@ -31,17 +43,23 @@ final class AppModel: ObservableObject {
         CredentialStore.save(c)
         ClientBox.shared.client = JellyfinClient(creds: c)
         creds = c
+        network.check()
         downloads.start()
         await library.refresh()
     }
 
-    func logout() {
+    /// `keepDownloads`: songs, covers and lyrics stay on the phone and are
+    /// there again after logging back in to the same server.
+    func logout(keepDownloads: Bool) {
         player.stop()
-        downloads.deleteAll()
         library.reset()
-        Task {
-            await ArtworkCache.shared.clearAll()
-            await LyricsStore.shared.clearAll()
+        ServerProbe.forget()
+        if !keepDownloads {
+            downloads.deleteAll()
+            Task {
+                await ArtworkCache.shared.clearAll()
+                await LyricsStore.shared.clearAll()
+            }
         }
         CredentialStore.clear()
         ClientBox.shared.client = nil

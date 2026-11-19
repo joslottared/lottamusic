@@ -19,25 +19,31 @@ enum LRCLib {
     /// Lyrics for the track, or nil when LRCLIB has none.
     /// Throws `Failure.network` when lrclib.net can't be reached (not cached then).
     static func lyrics(for item: BaseItem) async throws -> Lyrics? {
-        guard let title = item.name, !title.isEmpty else { return nil }
-        let artist = item.artists?.first ?? item.albumArtist ?? ""
-        guard !artist.isEmpty else { return nil }
+        guard let q = LyricsQuery(item) else { return nil }
         let duration = item.duration
 
-        // 1. Exact match (title + artist + album + duration ±2 s on their side).
-        var query = ["track_name": title, "artist_name": artist]
+        // 1. Exact match with the names as they are (title + artist + album + duration).
+        var query = ["track_name": q.titles[0], "artist_name": q.artists[0]]
         if let album = item.album, !album.isEmpty { query["album_name"] = album }
         if let duration { query["duration"] = String(Int(duration.rounded())) }
         if let r: Record = try await get("get", query), let l = convert(r) { return l }
 
-        // 2. Looser search: same title + artist, closest duration, synced first.
-        let results: [Record] = try await get("search", ["track_name": title, "artist_name": artist]) ?? []
+        // 2. Searches with cleaned-up names ("Song (feat. X) - Remastered" → "Song",
+        //    "A & B" → "A"), closest duration, synced first.
+        for (title, artist) in q.combinations {
+            let results: [Record] = try await get("search", ["track_name": title, "artist_name": artist]) ?? []
+            if let l = best(results, duration: duration) { return l }
+        }
+        return nil
+    }
+
+    private static func best(_ results: [Record], duration: Double?) -> Lyrics? {
         let candidates = results.filter { r in
             guard let duration, let d = r.duration else { return true }
             return abs(d - duration) <= 3
         }
-        let best = candidates.first { $0.syncedLyrics?.isEmpty == false } ?? candidates.first
-        return best.flatMap(convert)
+        let pick = candidates.first { $0.syncedLyrics?.isEmpty == false } ?? candidates.first
+        return pick.flatMap(convert)
     }
 
     private static func get<T: Decodable>(_ path: String, _ query: [String: String]) async throws -> T? {
@@ -109,5 +115,82 @@ enum LRCLib {
             if ch == "<" { skipping = true } else if ch == ">" { skipping = false } else if !skipping { out.append(ch) }
         }
         return out.replacingOccurrences(of: "  ", with: " ")
+    }
+}
+
+/// Title/artist variants to search lyrics with. Library tags often carry
+/// extras that lyric databases don't: "(feat. X)", "- Remastered 2011",
+/// "[Live]", or several artists in one field.
+struct LyricsQuery {
+    /// Original first, then cleaned-up versions (no duplicates).
+    let titles: [String]
+    let artists: [String]
+
+    init?(_ item: BaseItem) {
+        guard let title = item.name?.trimmingCharacters(in: .whitespaces), !title.isEmpty,
+              let artist = (item.artists?.first ?? item.albumArtist)?.trimmingCharacters(in: .whitespaces),
+              !artist.isEmpty else { return nil }
+        titles = Self.unique([title, Self.withoutExtras(title), Self.withoutAnyBrackets(title)])
+        artists = Self.unique([artist, Self.mainArtist(artist)])
+    }
+
+    /// Search order: cleanest title first, at most 4 combinations.
+    var combinations: [(String, String)] {
+        var out: [(String, String)] = []
+        for t in titles.reversed() { for a in artists.reversed() { out.append((t, a)) } }
+        var seen = Set<String>()
+        return Array(out.filter { seen.insert(($0.0 + "|" + $0.1).lowercased()).inserted }.prefix(4))
+    }
+
+    private static let extraWords = [
+        "feat", "ft.", "featuring", "with", "con ", "remaster", "live", "en vivo", "version", "versión",
+        "edit", "mix", "explicit", "clean", "mono", "stereo", "deluxe", "bonus", "acoustic", "acústic",
+        "demo", "instrumental", "radio", "single", "extended", "original", "from ", "bonus track",
+    ]
+
+    private static func isExtra(_ s: String) -> Bool {
+        let l = s.lowercased()
+        return extraWords.contains { l.contains($0) } || l.range(of: #"\b(19|20)\d\d\b"#, options: .regularExpression) != nil
+    }
+
+    /// Drops "(feat. X)", "[Live]", " - Remastered 2011", "- Radio Edit"…
+    static func withoutExtras(_ title: String) -> String {
+        var t = title
+        // Bracketed groups with an "extra" word inside.
+        for pattern in [#"\([^)]*\)"#, #"\[[^\]]*\]"#] {
+            while let r = t.range(of: pattern, options: .regularExpression), isExtra(String(t[r])) {
+                t.removeSubrange(r)
+            }
+        }
+        // " - something extra" at the end.
+        if let r = t.range(of: " - ", options: .backwards), isExtra(String(t[r.upperBound...])) {
+            t = String(t[..<r.lowerBound])
+        }
+        // Trailing "feat. X" without brackets.
+        if let r = t.range(of: #"\s(feat\.?|ft\.|featuring)\s.*$"#, options: [.regularExpression, .caseInsensitive]) {
+            t.removeSubrange(r)
+        }
+        return t.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Last resort: no brackets at all, no " - …" suffix.
+    static func withoutAnyBrackets(_ title: String) -> String {
+        var t = title.replacingOccurrences(of: #"\s*[\(\[][^\)\]]*[\)\]]"#, with: "", options: .regularExpression)
+        if let r = t.range(of: " - ") { t = String(t[..<r.lowerBound]) }
+        return t.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// "A, B", "A & B", "A feat. B", "A x B" → "A".
+    static func mainArtist(_ artist: String) -> String {
+        var a = artist
+        for sep in [",", " & ", " feat. ", " feat ", " ft. ", " x ", " X ", ";", " / "] {
+            if let r = a.range(of: sep, options: .caseInsensitive) { a = String(a[..<r.lowerBound]) }
+        }
+        return a.trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func unique(_ list: [String]) -> [String] {
+        var seen = Set<String>()
+        return list.filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
     }
 }

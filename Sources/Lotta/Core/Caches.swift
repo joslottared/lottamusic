@@ -78,14 +78,15 @@ actor LyricsStore {
     private struct Cached: Codable {
         var lyrics: Lyrics?
         var fetched: Date
-        /// 2 = server + LRCLIB lookup. Older "no lyrics" answers are re-checked.
+        /// 3 = server + LRCLIB (with cleaned-up names) + NetEase.
+        /// Older "no lyrics" answers are re-checked.
         var v: Int? = nil
     }
 
-    private static let version = 2
+    private static let version = 3
     private var memory: [String: Cached] = [:]
 
-    /// Server first, LRCLIB as fallback (if enabled). Cached on disk for offline use.
+    /// Server first, then LRCLIB, then NetEase (each if enabled). Cached on disk for offline use.
     func lyrics(for item: BaseItem) async -> Lyrics? {
         let itemId = item.id
         if let c = memory[itemId], isFresh(c) { return c.lyrics }
@@ -108,6 +109,12 @@ actor LyricsStore {
         if found == nil, AppSettings.lrclibEnabled {
             do {
                 found = try await LRCLib.lyrics(for: item)
+                answered = true
+            } catch {}
+        }
+        if found == nil, AppSettings.neteaseEnabled {
+            do {
+                found = try await NetEaseLyrics.lyrics(for: item)
                 answered = true
             } catch {}
         }
