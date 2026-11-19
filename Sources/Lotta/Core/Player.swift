@@ -3,7 +3,7 @@ import Combine
 import MediaPlayer
 import UIKit
 
-enum RepeatMode {
+enum RepeatMode: String, Codable {
     case off, all, one
 
     var next: RepeatMode {
@@ -37,13 +37,38 @@ final class Player: ObservableObject {
     private var statusObservation: NSKeyValueObservation?
     private var nowArtwork: (id: String, artwork: MPMediaItemArtwork)?
 
+    // MARK: Resume where we left off
+    private struct SavedState: Codable {
+        var queue: [BaseItem]
+        var index: Int
+        var time: TimeInterval
+        var repeatMode: RepeatMode
+    }
+    private static let stateFile = "player.json"
+    /// Position to restore when the restored track is first loaded.
+    private var pendingResume: (id: String, time: TimeInterval)?
+    private var lastSavedTime: TimeInterval = 0
+
     init() {
+        if let saved = Storage.readJSON(SavedState.self, Self.stateFile),
+           saved.queue.indices.contains(saved.index) {
+            queue = saved.queue
+            index = saved.index
+            repeatMode = saved.repeatMode
+            currentTime = saved.time
+            lastSavedTime = saved.time
+            duration = saved.queue[saved.index].duration ?? 0
+            pendingResume = (saved.queue[saved.index].id, saved.time)
+        }
+
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
         ) { [weak self] time in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                guard self.player.currentItem != nil else { return }
                 self.currentTime = time.seconds.isFinite ? time.seconds : 0
+                if abs(self.currentTime - self.lastSavedTime) >= 5 { self.saveState() }
                 if let d = self.player.currentItem?.duration.seconds, d.isFinite, d > 0, abs(d - self.duration) > 0.5 {
                     self.duration = d
                     self.updateNowPlaying()
@@ -76,7 +101,20 @@ final class Player: ObservableObject {
             MainActor.assumeIsolated { self?.resume() }
         }
 
+        for name in [UIApplication.willResignActiveNotification, UIApplication.didEnterBackgroundNotification] {
+            nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.saveState() }
+            }
+        }
+
         setupRemoteCommands()
+    }
+
+    private func saveState() {
+        lastSavedTime = currentTime
+        guard current != nil else { return Storage.remove(Self.stateFile) }
+        Storage.writeJSON(SavedState(queue: queue, index: index, time: currentTime, repeatMode: repeatMode),
+                          Self.stateFile)
     }
 
     // MARK: - Queue
@@ -110,17 +148,20 @@ final class Player: ObservableObject {
     func playNext(_ item: BaseItem) {
         guard current != nil else { return play([item]) }
         queue.insert(item, at: index + 1)
+        saveState()
     }
 
     func addToQueue(_ item: BaseItem) {
         guard current != nil else { return play([item]) }
         queue.append(item)
+        saveState()
     }
 
     func removeFromQueue(at offset: Int) {
         guard offset != index, queue.indices.contains(offset) else { return }
         queue.remove(at: offset)
         if offset < index { index -= 1 }
+        saveState()
     }
 
     func stop() {
@@ -130,7 +171,9 @@ final class Player: ObservableObject {
         index = 0
         currentTime = 0
         duration = 0
+        pendingResume = nil
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        Storage.remove(Self.stateFile)
     }
 
     // MARK: - Transport
@@ -150,6 +193,7 @@ final class Player: ObservableObject {
         player.pause()
         isPlaying = false
         updateNowPlaying()
+        saveState()
     }
 
     func next() { advance(auto: false) }
@@ -174,6 +218,10 @@ final class Player: ObservableObject {
     func seek(to seconds: TimeInterval) {
         let t = max(0, seconds)
         currentTime = t
+        if player.currentItem == nil, let id = current?.id {
+            // Restored but not loaded yet: remember where to start.
+            pendingResume = (id, t)
+        }
         player.seek(to: CMTime(seconds: t, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         updateNowPlaying()
     }
@@ -212,26 +260,45 @@ final class Player: ObservableObject {
         }
 
         errorMessage = nil
+        // Only the restored track resumes mid-song; anything else starts at 0.
+        let resumeAt = pendingResume?.id == item.id ? pendingResume?.time ?? 0 : 0
+        pendingResume = nil
         let playerItem = AVPlayerItem(asset: asset)
         itemStatusObservation = playerItem.observe(\.status, options: [.new]) { [weak self] it, _ in
-            guard it.status == .failed else { return }
-            let message = Self.describe(it.error)
-            Task { @MainActor in
-                guard let self, self.player.currentItem === it else { return }
-                self.errorMessage = message
-                self.isPlaying = false
+            switch it.status {
+            case .failed:
+                let message = Self.describe(it.error)
+                Task { @MainActor in
+                    guard let self, self.player.currentItem === it else { return }
+                    self.errorMessage = message
+                    self.isPlaying = false
+                }
+            case .readyToPlay where resumeAt > 1:
+                Task { @MainActor in
+                    guard let self, self.player.currentItem === it else { return }
+                    self.player.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600),
+                                     toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                        Task { @MainActor in
+                            if autoplay, self.player.currentItem === it { self.player.play() }
+                        }
+                    }
+                }
+            default:
+                break
             }
         }
         player.replaceCurrentItem(with: playerItem)
-        currentTime = 0
+        currentTime = resumeAt
         duration = item.duration ?? 0
         if autoplay {
             activateSession()
-            player.play()
+            // When resuming mid-song, playback starts after the seek lands.
+            if resumeAt <= 1 { player.play() }
             isPlaying = true
         }
         updateNowPlaying()
         loadNowPlayingArtwork(for: item)
+        saveState()
     }
 
     private nonisolated static func describe(_ error: Error?) -> String {

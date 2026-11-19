@@ -442,10 +442,10 @@ struct SearchView: View {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
             searching = true
+            defer { searching = false }
             let r = await library.search(query)
             guard !Task.isCancelled else { return }
             results = r
-            searching = false
         }
     }
 }
@@ -457,6 +457,7 @@ struct SettingsView: View {
     @EnvironmentObject private var network: NetworkMonitor
     @AppStorage(AppSettings.autoSyncKey) private var autoSync = true
     @AppStorage(AppSettings.syncArtworkKey) private var syncArtwork = true
+    @AppStorage(AppSettings.lrclibKey) private var lrclib = true
     @Environment(\.dismiss) private var dismiss
     @AppStorage(AppSettings.streamQualityKey) private var streamQuality: AudioQuality = .original
     @AppStorage(AppSettings.downloadQualityKey) private var downloadQuality: AudioQuality = .original
@@ -517,6 +518,17 @@ struct SettingsView: View {
                         }
                         Text("Guarda álbumes, artistas, playlists y sus canciones para navegar sin conexión, y actualiza tus playlists y álbumes descargados con los cambios del servidor. Al abrir la app se sincroniza como máximo una vez al día.")
                     }
+                }
+
+                Section {
+                    Toggle("Buscar letras en LRCLIB", isOn: $lrclib)
+                        .onChange(of: lrclib) { _, on in
+                            if on { Task { await LyricsStore.shared.forgetMissing() } }
+                        }
+                } header: {
+                    Text("Letras")
+                } footer: {
+                    Text("Si tu servidor no tiene la letra de una canción, Lotta la busca en lrclib.net, una base de letras gratuita. Se envían el título, artista, álbum y duración de la canción.")
                 }
 
                 Section("Almacenamiento") {

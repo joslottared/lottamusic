@@ -14,6 +14,7 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var lastSync: Date?
     @Published private(set) var lastSyncSummary: String?
     private var syncTask: Task<Void, Never>?
+    private var searchIndex: [SearchEntry]?
 
     struct SyncProgress: Equatable {
         var phase: String
@@ -44,10 +45,12 @@ final class LibraryStore: ObservableObject {
     }
 
     private func save() {
+        searchIndex = nil
         Storage.writeJSON(Snapshot(albums: albums, artists: artists, tracksByAlbum: tracksByAlbum, playlists: playlists), Self.fileName)
     }
 
     func reset() {
+        searchIndex = nil
         albums = []
         artists = []
         playlists = []
@@ -291,16 +294,79 @@ final class LibraryStore: ObservableObject {
         return local.filter { $0.albumArtist == artist.name }
     }
 
+    // MARK: - Search
+    // Searches the synced library locally (instant, works offline, ignores
+    // accents and case, every word must match somewhere). Falls back to the
+    // server when nothing has been synced yet.
+
+    private struct SearchEntry: Sendable {
+        let item: BaseItem
+        let text: String
+    }
+
+    nonisolated static func fold(_ s: String) -> String {
+        s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+
+    private func buildSearchIndex() async -> [SearchEntry] {
+        if let searchIndex { return searchIndex }
+        let artists = artists, albums = albums, playlists = playlists
+        var tracks: [String: BaseItem] = [:]
+        for list in tracksByAlbum.values {
+            for var t in list where tracks[t.id] == nil {
+                t.playlistItemId = nil
+                tracks[t.id] = t
+            }
+        }
+        for t in downloads?.allTracks ?? [] where tracks[t.id] == nil { tracks[t.id] = t }
+        let trackList = Array(tracks.values)
+        let index = await Task.detached(priority: .userInitiated) { () -> [SearchEntry] in
+            let fold = LibraryStore.fold
+            var out: [SearchEntry] = []
+            out.reserveCapacity(artists.count + albums.count + playlists.count + trackList.count)
+            for a in artists { out.append(SearchEntry(item: a, text: fold(a.title))) }
+            for a in albums { out.append(SearchEntry(item: a, text: fold(a.title + " " + (a.albumArtist ?? "")))) }
+            for p in playlists { out.append(SearchEntry(item: p, text: fold(p.title))) }
+            for t in trackList {
+                out.append(SearchEntry(item: t, text: fold(t.title + " " + t.trackArtist + " " + (t.album ?? ""))))
+            }
+            return out
+        }.value
+        searchIndex = index
+        return index
+    }
+
     func search(_ term: String) async -> [BaseItem] {
-        if let client = ClientBox.shared.client, let results = try? await client.search(term) {
-            return results
+        let tokens = Self.fold(term).split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !tokens.isEmpty else { return [] }
+        let index = await buildSearchIndex()
+
+        let results = await Task.detached(priority: .userInitiated) { () -> [BaseItem] in
+            let first = tokens[0]
+            // 0: starts with the query, 1: a word starts with it, 2: contains it.
+            func rank(_ e: SearchEntry) -> Int {
+                if e.text.hasPrefix(first) { return 0 }
+                if e.text.contains(" " + first) { return 1 }
+                return 2
+            }
+            let matches = index.enumerated()
+                .filter { _, e in tokens.allSatisfy { e.text.contains($0) } }
+                .map { (offset: $0.offset, rank: rank($0.element), item: $0.element.item) }
+                .sorted { ($0.rank, $0.offset) < ($1.rank, $1.offset) }
+                .map(\.item)
+            let artists = matches.filter(\.isArtist).prefix(15)
+            let albums = matches.filter(\.isAlbum).prefix(30)
+            let playlists = matches.filter(\.isPlaylist).prefix(15)
+            let tracks = matches.filter(\.isTrack).prefix(100)
+            return Array(artists) + Array(albums) + Array(playlists) + Array(tracks)
+        }.value
+
+        let haveTracks = !tracksByAlbum.isEmpty
+        if (results.isEmpty || !haveTracks), let client = ClientBox.shared.client,
+           let remote = try? await client.search(term), !remote.isEmpty {
+            return remote
         }
-        // Offline: search what we have locally.
-        let match: (BaseItem) -> Bool = { $0.title.localizedCaseInsensitiveContains(term) }
-        let tracks = (downloads?.allTracks ?? []).filter {
-            match($0) || $0.trackArtist.localizedCaseInsensitiveContains(term)
-        }
-        return artists.filter(match) + albums.filter(match) + playlists.filter(match) + tracks
+        return results
     }
 }
 

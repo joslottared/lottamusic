@@ -149,7 +149,7 @@ struct NowPlayingView: View {
                 let c = Color(uiColor: avg.adjusted(brightness: 0.28...0.55, minSaturation: 0.35))
                 withAnimation(.easeInOut(duration: 0.6)) { background = c }
             }
-            lyrics = await LyricsStore.shared.lyrics(for: item.id)
+            lyrics = await LyricsStore.shared.lyrics(for: item)
             lyricsLoaded = true
         }
     }

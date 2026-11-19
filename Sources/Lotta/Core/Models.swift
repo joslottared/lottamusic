@@ -93,6 +93,8 @@ struct Lyrics: Codable, Sendable, Equatable {
     }
 
     var lines: [Line]
+    /// Where the lyrics came from when it wasn't the Jellyfin server (e.g. "LRCLIB").
+    var source: String? = nil
 
     var isSynced: Bool { lines.contains { $0.start != nil } }
 
@@ -135,6 +137,11 @@ enum AppSettings {
     static let autoSyncKey = "lotta.sync.auto"
     static let syncArtworkKey = "lotta.sync.artwork"
     static let lastSyncKey = "lotta.sync.last"
+    static let lrclibKey = "lotta.lyrics.lrclib"
+
+    static var lrclibEnabled: Bool {
+        UserDefaults.standard.object(forKey: lrclibKey) as? Bool ?? true
+    }
 
     static var streamQuality: AudioQuality {
         AudioQuality(rawValue: UserDefaults.standard.string(forKey: streamQualityKey) ?? "") ?? .original

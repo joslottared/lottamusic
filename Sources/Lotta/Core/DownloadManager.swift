@@ -160,7 +160,7 @@ final class DownloadManager: NSObject, ObservableObject {
             failed.remove(t.id)
             startTask(t)
             artworkIds.insert(t.artworkItemId)
-            Task.detached(priority: .utility) { _ = await LyricsStore.shared.lyrics(for: t.id) }
+            Task.detached(priority: .utility) { _ = await LyricsStore.shared.lyrics(for: t) }
         }
         if let album { artworkIds.insert(album.id) }
         if let playlist { artworkIds.insert(playlist.id) }

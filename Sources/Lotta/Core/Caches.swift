@@ -78,11 +78,16 @@ actor LyricsStore {
     private struct Cached: Codable {
         var lyrics: Lyrics?
         var fetched: Date
+        /// 2 = server + LRCLIB lookup. Older "no lyrics" answers are re-checked.
+        var v: Int? = nil
     }
 
+    private static let version = 2
     private var memory: [String: Cached] = [:]
 
-    func lyrics(for itemId: String) async -> Lyrics? {
+    /// Server first, LRCLIB as fallback (if enabled). Cached on disk for offline use.
+    func lyrics(for item: BaseItem) async -> Lyrics? {
+        let itemId = item.id
         if let c = memory[itemId], isFresh(c) { return c.lyrics }
 
         let file = Storage.lyrics.appendingPathComponent(itemId + ".json")
@@ -92,21 +97,45 @@ actor LyricsStore {
             return onDisk.lyrics
         }
 
-        guard let client = ClientBox.shared.client else { return onDisk?.lyrics }
-        do {
-            let l = try await client.lyrics(itemId: itemId)
-            let c = Cached(lyrics: l, fetched: Date())
-            memory[itemId] = c
-            if let data = try? JSONEncoder().encode(c) { try? data.write(to: file, options: .atomic) }
-            return l
-        } catch {
-            return onDisk?.lyrics // offline / server unreachable
+        var found: Lyrics?
+        var answered = false // someone gave a definite answer (lyrics or "none")
+        if let client = ClientBox.shared.client {
+            do {
+                found = try await client.lyrics(itemId: itemId)
+                answered = true
+            } catch {}
         }
+        if found == nil, AppSettings.lrclibEnabled {
+            do {
+                found = try await LRCLib.lyrics(for: item)
+                answered = true
+            } catch {}
+        }
+        guard answered else { return onDisk?.lyrics } // offline / unreachable
+
+        let c = Cached(lyrics: found, fetched: Date(), v: Self.version)
+        memory[itemId] = c
+        if let data = try? JSONEncoder().encode(c) { try? data.write(to: file, options: .atomic) }
+        return found
     }
 
     /// "No lyrics" answers are re-checked after a week; found lyrics are kept.
     private func isFresh(_ c: Cached) -> Bool {
-        c.lyrics != nil || Date().timeIntervalSince(c.fetched) < 7 * 24 * 3600
+        if c.lyrics != nil { return true }
+        return (c.v ?? 1) >= Self.version && Date().timeIntervalSince(c.fetched) < 7 * 24 * 3600
+    }
+
+    /// Drops cached "no lyrics" answers so they're looked up again
+    /// (e.g. after turning LRCLIB on).
+    func forgetMissing() {
+        memory = memory.filter { $0.value.lyrics != nil }
+        let dir = Storage.lyrics
+        guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+        for f in files {
+            guard let data = try? Data(contentsOf: f),
+                  let c = try? JSONDecoder().decode(Cached.self, from: data), c.lyrics == nil else { continue }
+            try? FileManager.default.removeItem(at: f)
+        }
     }
 
     func clearAll() {
