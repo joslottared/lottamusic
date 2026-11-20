@@ -22,6 +22,8 @@ struct NowPlayingView: View {
     @State private var addToPlaylist: BaseItem?
     @State private var selectionRequest = 0
     @Environment(\.dismiss) private var dismiss
+    /// The app's scheme (the player itself is always dark).
+    @Environment(\.colorScheme) private var appColorScheme
 
     /// One drag, two meanings, decided by the first movement:
     /// vertical (down) closes the player, horizontal changes track.
@@ -134,7 +136,7 @@ struct NowPlayingView: View {
         }
         .sheet(item: $addToPlaylist) { item in
             AddToPlaylistView(tracks: [item])
-                .environment(\.colorScheme, .light)
+                .environment(\.colorScheme, appColorScheme)
         }
         .task(id: item?.id) {
             lyrics = nil
@@ -154,7 +156,7 @@ struct NowPlayingView: View {
             }
         } center: {
             VStack(spacing: 1) {
-                Text("Sonando desde").lottaLabel().opacity(0.65)
+                Text("Sonando desde").lottaLabel().opacity(0.8)
                 Text(item?.album ?? item?.trackArtist ?? "")
                     .font(.subheadline.weight(.semibold))
                     .lottaLower()
@@ -386,7 +388,7 @@ struct Scrubber: View {
                 Text("-" + formatTime(max(0, duration - value)))
             }
             .font(.caption.monospacedDigit().monospaced())
-            .opacity(0.6)
+            .opacity(0.8)
         }
     }
 }

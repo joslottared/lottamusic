@@ -52,7 +52,7 @@ struct LibraryView: View {
                                              : "Sin conexión · mostrando tus descargas",
                           systemImage: network.hasNetwork ? "server.rack" : "wifi.slash")
                         .font(.footnote.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                 } else if let err = library.lastError, library.albums.isEmpty {
                     Text(err).font(.footnote).foregroundStyle(.red)
                 }
@@ -86,9 +86,8 @@ struct LibraryView: View {
             .animation(.spring(response: 0.35), value: library.isSyncing)
         }
         .scrollContentBackground(.hidden)
-        .background(Theme.darkBackground.ignoresSafeArea())
-        .foregroundStyle(.white)
-        .environment(\.colorScheme, .dark)
+        .background(Theme.background.ignoresSafeArea())
+        .foregroundStyle(Theme.ink)
         .navigationTitle("biblioteca") // only shown as the back button
         .toolbar(.hidden, for: .navigationBar)
         .refreshable { await library.refresh() }
@@ -106,6 +105,12 @@ struct LibraryView: View {
         return network.hasNetwork ? .orange : .gray
     }
 
+    /// Said in words too, not only with the dot's color.
+    private var statusText: String {
+        let state = network.isOnline ? "En línea" : (network.hasNetwork ? "Sin servidor" : "Sin conexión")
+        return songCount > 0 ? "\(state) · \(songCount) canciones" : state
+    }
+
     private var serverCapsule: some View {
         GlassCapsule {
             EmptyView()
@@ -120,9 +125,7 @@ struct LibraryView: View {
                         .font(.subheadline.weight(.semibold))
                         .lottaLower()
                         .lineLimit(1)
-                    if songCount > 0 {
-                        Text("\(songCount) canciones").lottaLabel(mono: true).opacity(0.6)
-                    }
+                    Text(statusText).lottaLabel(mono: true).foregroundStyle(Theme.secondaryText)
                 }
                 Spacer(minLength: 0)
             }
@@ -133,7 +136,7 @@ struct LibraryView: View {
             if library.isSyncing {
                 ProgressView()
                     .frame(width: 46, height: 46)
-                    .background(Circle().fill(Theme.glassFill))
+                    .background(Circle().fill(Theme.insetFill))
             } else {
                 GlassCircleButton(systemImage: "arrow.triangle.2.circlepath",
                                   accessibilityLabel: "Sincronizar biblioteca", style: .inset) {
@@ -223,7 +226,7 @@ private struct ResumeProgress: View {
         GeometryReader { geo in
             let f = player.duration > 0 ? min(1, player.currentTime / player.duration) : 0
             ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.2))
+                Capsule().fill(Theme.track)
                 Capsule().fill(Theme.accentMark).frame(width: geo.size.width * f)
             }
         }
@@ -269,7 +272,7 @@ private struct ResumeStack: View {
                 .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Seguir").lottaLabel(tracking: 1.2).foregroundStyle(Theme.accentMark)
+                    Text("Seguir").lottaLabel(tracking: 1.2).foregroundStyle(Theme.accentText)
                     Text(item.title).font(.headline).lottaLower().lineLimit(2)
                     Text(item.trackArtist).font(.subheadline).lottaLower().opacity(0.65).lineLimit(1)
                     HStack(spacing: 10) {
@@ -278,9 +281,9 @@ private struct ResumeStack: View {
                             Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                                 .contentTransition(.symbolEffect(.replace))
                                 .font(.body.weight(.bold))
-                                .foregroundStyle(Theme.darkBackground)
+                                .foregroundStyle(Theme.background)
                                 .frame(width: Theme.minTap, height: Theme.minTap)
-                                .background(Circle().fill(.white))
+                                .background(Circle().fill(Theme.ink))
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(player.isPlaying ? "Pausa" : "Seguir reproduciendo")
@@ -321,7 +324,7 @@ struct AlbumGrid: View {
                             Text(album.artistLine).lottaLower().lineLimit(1)
                         }
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                     }
                 }
                 .buttonStyle(.plain)
@@ -373,16 +376,14 @@ struct AlbumView: View {
                         }
                     }
                     .listRowBackground(Color.clear)
-                    .listRowSeparatorTint(Theme.ink.opacity(0.1))
+                    .listRowSeparatorTint(Theme.separator)
             }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .background(Theme.cream.ignoresSafeArea())
+        .background(Theme.background.ignoresSafeArea())
         .foregroundStyle(Theme.ink)
-        .tint(Theme.accentInk)
-        .preferredColorScheme(.light)
-        .environment(\.colorScheme, .light)
+        .tint(Theme.accentText)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -413,7 +414,7 @@ struct AlbumView: View {
                     .offset(x: 92)
                 ArtworkView(itemId: album.id, size: ArtworkSize.large, cornerRadius: 6)
                     .frame(width: 230, height: 230)
-                    .shadow(color: Theme.plum.opacity(0.25), radius: 18, y: 10)
+                    .shadow(color: .black.opacity(0.25), radius: 18, y: 10)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 8)
@@ -428,10 +429,10 @@ struct AlbumView: View {
                 Text(album.artistLine)
                     .font(.title3.weight(.semibold))
                     .lottaLower()
-                    .foregroundStyle(Theme.accentInk)
+                    .foregroundStyle(Theme.accentText)
                 Text(dataLine)
                     .lottaLabel(mono: true, tracking: 1.0)
-                    .foregroundStyle(Theme.plumSoft)
+                    .foregroundStyle(Theme.secondaryText)
             }
 
             EditorialButtons(disabled: tracks.isEmpty,
@@ -554,7 +555,7 @@ struct ArtistView: View {
                 if !dataLine.isEmpty {
                     Text(dataLine)
                         .lottaLabel(mono: true, tracking: 1.0)
-                        .foregroundStyle(Theme.plumSoft)
+                        .foregroundStyle(Theme.secondaryText)
                 }
 
                 EditorialButtons(disabled: tracks.isEmpty,
@@ -565,7 +566,7 @@ struct ArtistView: View {
                     HStack {
                         Text("Discografía").lottaLabel(tracking: 1.2).foregroundStyle(Theme.plum)
                         Spacer()
-                        Text("\(albums.count)").lottaLabel(mono: true).foregroundStyle(Theme.plumSoft)
+                        Text("\(albums.count)").lottaLabel(mono: true).foregroundStyle(Theme.secondaryText)
                     }
                     .padding(.top, 8)
 
@@ -575,7 +576,7 @@ struct ArtistView: View {
                                 HStack(spacing: 14) {
                                     Text(String(format: "%02d", i + 1))
                                         .font(.subheadline.monospaced())
-                                        .foregroundStyle(Theme.plumSoft)
+                                        .foregroundStyle(Theme.secondaryText)
                                         .frame(minWidth: 26, alignment: .leading)
                                     ArtworkView(itemId: album.id, cornerRadius: 4)
                                         .frame(width: 48, height: 48)
@@ -588,7 +589,7 @@ struct ArtistView: View {
                                     if let y = album.productionYear {
                                         Text(String(y))
                                             .font(.caption.monospaced())
-                                            .foregroundStyle(Theme.plumSoft)
+                                            .foregroundStyle(Theme.secondaryText)
                                     }
                                 }
                                 .padding(.vertical, 8)
@@ -596,7 +597,7 @@ struct ArtistView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            Divider().overlay(Theme.ink.opacity(0.08))
+                            Divider().overlay(Theme.separator)
                         }
                     }
                 }
@@ -607,7 +608,7 @@ struct ArtistView: View {
         .scrollContentBackground(.hidden)
         .background(alignment: .bottomTrailing) {
             ZStack(alignment: .bottomTrailing) {
-                Theme.cream
+                Theme.background
                 VinylDisc(labelColor: Theme.plum)
                     .frame(width: 260, height: 260)
                     .offset(x: 90, y: 70)
@@ -616,9 +617,7 @@ struct ArtistView: View {
             .ignoresSafeArea()
             .allowsHitTesting(false)
         }
-        .preferredColorScheme(.light)
-        .environment(\.colorScheme, .light)
-        .tint(Theme.accentInk)
+        .tint(Theme.accentText)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             albums = await library.albums(for: artist)
@@ -668,7 +667,7 @@ struct DownloadsView: View {
                             ArtworkView(itemId: item.artworkItemId, cornerRadius: 4).frame(width: 40, height: 40)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.title).lottaLower().lineLimit(1)
-                                Text(item.trackArtist).font(.caption).lottaLower().foregroundStyle(.secondary).lineLimit(1)
+                                Text(item.trackArtist).font(.caption).lottaLower().foregroundStyle(Theme.secondaryText).lineLimit(1)
                             }
                             Spacer()
                             DownloadIndicator(state: downloads.state(for: item.id))
@@ -719,7 +718,7 @@ struct DownloadsView: View {
                                        description: Text("Toca ↓ en un álbum para tenerlo sin conexión."))
             }
         }
-        .lottaDarkScreen()
+        .lottaScreen()
         .navigationTitle("descargas")
         .toolbar {
             if !downloads.downloaded.isEmpty {
@@ -787,7 +786,7 @@ struct SearchView: View {
             }
         }
         .searchable(text: $query, prompt: "Artistas, álbumes o canciones")
-        .lottaDarkScreen()
+        .lottaScreen()
         .navigationTitle("buscar")
         .task(id: query) {
             guard query.count >= 2 else { results = []; return }
@@ -807,6 +806,7 @@ struct SettingsView: View {
     @EnvironmentObject private var downloads: DownloadManager
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var network: NetworkMonitor
+    @AppStorage(AppAppearance.storageKey) private var appearance: AppAppearance = .system
     @AppStorage(AppSettings.autoSyncKey) private var autoSync = false
     @AppStorage(AppSettings.syncArtworkKey) private var syncArtwork = true
     @AppStorage(AppSettings.lrclibKey) private var lrclib = true
@@ -825,6 +825,16 @@ struct SettingsView: View {
                         LabeledContent("Servidor", value: c.serverURL.host ?? c.serverURL.absoluteString)
                         LabeledContent("Usuario", value: c.userName)
                     }
+                }
+
+                Section {
+                    Picker("Apariencia", selection: $appearance) {
+                        ForEach(AppAppearance.allCases) { Text($0.label).tag($0) }
+                    }
+                } header: {
+                    Text("Apariencia")
+                } footer: {
+                    Text("“Sistema” sigue el modo claro u oscuro del iPhone. El reproductor siempre es oscuro.")
                 }
 
                 Section {
@@ -902,6 +912,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Ajustes")
+            .lottaAppearance()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Listo") { dismiss() } }
@@ -934,7 +945,7 @@ struct SyncProgressRow: View {
                 ProgressView().controlSize(.small)
                 Text("Sincronizando · \(sync.phase)")
                     .font(.footnote.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                     .lineLimit(1)
                     .contentTransition(.numericText())
             }

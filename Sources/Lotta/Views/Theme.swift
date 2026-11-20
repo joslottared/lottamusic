@@ -13,27 +13,92 @@ extension Color {
     }
 }
 
+extension UIColor {
+    convenience init(hex: UInt32, alpha: CGFloat = 1) {
+        self.init(red: CGFloat((hex >> 16) & 0xFF) / 255,
+                  green: CGFloat((hex >> 8) & 0xFF) / 255,
+                  blue: CGFloat(hex & 0xFF) / 255,
+                  alpha: alpha)
+    }
+}
+
+/// Light/dark appearance chosen in Ajustes.
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+    static let storageKey = "lotta.appearance"
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .system: "Sistema"
+        case .light: "Claro"
+        case .dark: "Oscuro"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
+/// Applies the appearance chosen in Ajustes (or follows the iPhone).
+struct LottaAppearance: ViewModifier {
+    @AppStorage(AppAppearance.storageKey) private var appearance: AppAppearance = .system
+    func body(content: Content) -> some View {
+        content.preferredColorScheme(appearance.colorScheme)
+    }
+}
+
+extension View {
+    func lottaAppearance() -> some View { modifier(LottaAppearance()) }
+}
+
+/// Colors resolve against the view's color scheme: light = cream editorial,
+/// dark = violet glass. Text pairs checked for WCAG AA (≥ 4.5:1) on their
+/// backgrounds; marks (bars, rings, icons) for ≥ 3:1.
 enum Theme {
+    private static func dynamic(light: UIColor, dark: UIColor) -> Color {
+        Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? dark : light })
+    }
+
     // Accent (violet)
-    /// Fills: buttons, selected pills.
+    /// Fills: buttons, selected pills (white text on it: 5.2:1).
     static let accent = Color(hex: 0x6D4AFF)
-    /// Marks: progress, rings, indicators.
+    /// Marks: progress, rings, indicators (3.9:1 on cream, 4.5:1 on dark).
     static let accentMark = Color(hex: 0x7C5CFF)
-    /// Accent text on light backgrounds.
-    static let accentInk = Color(hex: 0x5B3DE0)
+    /// Accent text: #5B3DE0 on cream (5.9:1), #A48FFF on dark (7.4:1).
+    static let accentText = dynamic(light: UIColor(hex: 0x5B3DE0), dark: UIColor(hex: 0xA48FFF))
 
-    // Dark glass
+    // Surfaces
+    /// Screen background: cream #F6F3EC / night #0D0B14.
+    static let background = dynamic(light: UIColor(hex: 0xF6F3EC), dark: UIColor(hex: 0x0D0B14))
+    /// Always-dark background (player, text on white buttons).
     static let darkBackground = Color(hex: 0x0D0B14)
-    static let glassFill = Color.white.opacity(0.12)
-    static let glassStroke = Color.white.opacity(0.20)
+    static let glassFill = dynamic(light: UIColor(white: 1, alpha: 0.6), dark: UIColor(white: 1, alpha: 0.12))
+    static let glassStroke = dynamic(light: UIColor(hex: 0x141014, alpha: 0.10), dark: UIColor(white: 1, alpha: 0.20))
+    /// Soft disc behind icons inside a glass capsule.
+    static let insetFill = dynamic(light: UIColor(hex: 0x141014, alpha: 0.06), dark: UIColor(white: 1, alpha: 0.12))
     /// Solid stand-in for glass when "Reduce transparency" is on.
-    static let glassSolid = Color(hex: 0x2A2635)
+    static let glassSolid = dynamic(light: UIColor(hex: 0xFFFFFF), dark: UIColor(hex: 0x2A2635))
+    /// Unfilled part of progress bars.
+    static let track = dynamic(light: UIColor(hex: 0x141014, alpha: 0.14), dark: UIColor(white: 1, alpha: 0.22))
 
-    // Light editorial
+    // Text
+    /// Primary text: ink #141014 on cream (17:1) / cream on night (17.6:1).
+    static let ink = dynamic(light: UIColor(hex: 0x141014), dark: UIColor(hex: 0xF6F3EC))
+    /// Headings in plum: #3B2340 (12.6:1) / #D9C6DE on dark.
+    static let plum = dynamic(light: UIColor(hex: 0x3B2340), dark: UIColor(hex: 0xD9C6DE))
+    /// Secondary text: #6E5F75 on cream (5.3:1) / #A99BB0 on dark (7.4:1).
+    /// (The original #8C7A92 was 3.6:1 on cream: too low for small text.)
+    static let secondaryText = dynamic(light: UIColor(hex: 0x6E5F75), dark: UIColor(hex: 0xA99BB0))
+    static let separator = dynamic(light: UIColor(hex: 0x141014, alpha: 0.10), dark: UIColor(white: 1, alpha: 0.10))
+
+    // Fixed editorial colors
     static let cream = Color(hex: 0xF6F3EC)
-    static let ink = Color(hex: 0x141014)
-    static let plum = Color(hex: 0x3B2340)
-    static let plumSoft = Color(hex: 0x8C7A92)
     static let gray = Color(hex: 0xEDECEF)
 
     /// Minimum hit target for every button.
@@ -107,20 +172,18 @@ struct LottaListHeader: View {
     init(_ text: String, mono: Bool = false) { self.text = text; self.mono = mono }
 
     var body: some View {
-        Text(text).lottaLabel(mono: mono, tracking: 1.0).foregroundStyle(.white.opacity(0.6))
+        Text(text).lottaLabel(mono: mono, tracking: 1.0).foregroundStyle(Theme.secondaryText)
     }
 }
 
 extension View {
-    /// Dark glass screen (library, downloads, search): dark background,
-    /// dark navigation bar and controls.
-    func lottaDarkScreen() -> some View {
+    /// Themed screen (library, downloads, search, playlist): cream in light
+    /// mode, night violet in dark mode.
+    func lottaScreen() -> some View {
         self
             .scrollContentBackground(.hidden)
-            .background(Theme.darkBackground.ignoresSafeArea())
-            .environment(\.colorScheme, .dark)
-            .toolbarBackground(Theme.darkBackground, for: .navigationBar)
-            .toolbarColorScheme(.dark, for: .navigationBar)
+            .background(Theme.background.ignoresSafeArea())
+            .toolbarBackground(Theme.background, for: .navigationBar)
     }
 }
 
@@ -182,9 +245,10 @@ struct GlassCircleButton: View {
                     if isActive {
                         Circle().fill(Theme.accent)
                     } else if style == .inset {
-                        Circle().fill(reduceTransparency ? Theme.glassSolid : Theme.glassFill)
+                        Circle().fill(reduceTransparency ? Theme.glassSolid : Theme.insetFill)
                     }
                 }
+                .foregroundStyle(isActive ? AnyShapeStyle(.white) : AnyShapeStyle(.foreground))
                 .modifier(OptionalGlass(enabled: style == .glass && !isActive))
                 .contentShape(Circle())
                 .opacity(isEnabled ? 1 : 0.4)
@@ -234,6 +298,7 @@ struct GlassPill: View {
         }
         .padding(.horizontal, title.isEmpty ? 0 : 16)
         .frame(minWidth: Theme.minTap, minHeight: Theme.minTap)
+        .foregroundStyle(isActive ? AnyShapeStyle(.white) : AnyShapeStyle(.foreground))
         .background { if isActive { Capsule().fill(Theme.accent) } }
         .modifier(PillGlass(enabled: !isActive))
         .contentShape(Capsule())
@@ -255,7 +320,7 @@ struct TechBadge: View {
     var body: some View {
         Text(text)
             .lottaLabel(mono: true, tracking: 0.8)
-            .foregroundStyle(tint.opacity(0.9))
+            .foregroundStyle(tint)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -285,7 +350,8 @@ struct AmbientBackground: View {
                 }
             }
             .clipped()
-            LinearGradient(colors: [.black.opacity(0.25), .black.opacity(0.45), Theme.darkBackground.opacity(0.92)],
+            // Dark enough at the top too, so white text stays readable over light covers.
+            LinearGradient(colors: [.black.opacity(0.5), .black.opacity(0.55), Theme.darkBackground.opacity(0.92)],
                            startPoint: .top, endPoint: .bottom)
         }
         .ignoresSafeArea()
@@ -344,14 +410,15 @@ struct VinylDisc: View {
         GeometryReader { geo in
             let d = min(geo.size.width, geo.size.height)
             ZStack {
-                Circle().fill(Theme.ink)
+                Circle().fill(Color(hex: 0x1A1620))
+                Circle().stroke(.white.opacity(0.12), lineWidth: 1) // rim, visible on dark screens
                 ForEach(1..<7) { i in
                     Circle()
                         .stroke(.white.opacity(0.06), lineWidth: 1)
                         .padding(d * (0.06 + CGFloat(i) * 0.045))
                 }
                 Circle().fill(labelColor).frame(width: d * 0.36, height: d * 0.36)
-                Circle().fill(Theme.cream).frame(width: d * 0.04, height: d * 0.04)
+                Circle().fill(Theme.background).frame(width: d * 0.04, height: d * 0.04)
             }
             .frame(width: d, height: d)
             .frame(maxWidth: .infinity, maxHeight: .infinity)

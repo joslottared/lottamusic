@@ -19,7 +19,7 @@ struct PlaylistList: View {
                                 Text(p.childCount.map { "\($0) canciones" } ?? "Playlist")
                             }
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                         }
                         Spacer()
                         Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
@@ -58,7 +58,7 @@ struct PlaylistView: View {
             } else if tracks.isEmpty {
                 Text("Esta playlist está vacía. Añade canciones desde el menú de cualquier canción.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                     .listRowSeparator(.hidden)
             }
 
@@ -81,8 +81,8 @@ struct PlaylistView: View {
             }
         }
         .listStyle(.plain)
-        .lottaDarkScreen()
-        .tint(Theme.accentMark)
+        .lottaScreen()
+        .tint(Theme.accentText)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { downloadButton }
@@ -121,7 +121,7 @@ struct PlaylistView: View {
                     .lottaEditorial(size: 36, weight: .heavy)
                     .lottaLower()
                     .multilineTextAlignment(.center)
-                Text(subtitle).lottaLabel(mono: true).foregroundStyle(.secondary)
+                Text(subtitle).lottaLabel(mono: true).foregroundStyle(Theme.secondaryText)
             }
             HStack(spacing: 10) {
                 Button { player.play(tracks) } label: {

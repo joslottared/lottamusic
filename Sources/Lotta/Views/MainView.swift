@@ -56,7 +56,8 @@ struct MainView: View {
                 .tag(MainTab.search)
         }
         .modifier(FloatingTabStyle())
-        .tint(Theme.accentMark)
+        .tint(Theme.accentText)
+        .lottaAppearance()
         .environment(\.openPlayer) { showPlayer = true }
         .environment(\.selectTab) { tab = $0 }
         .fullScreenCover(isPresented: $showPlayer) {
@@ -149,12 +150,12 @@ struct MiniPlayer: View {
                         Text(line)
                             .font(.caption)
                             .lottaLower()
-                            .foregroundStyle(Theme.accentMark)
+                            .foregroundStyle(Theme.accentText)
                             .lineLimit(1)
                             .id(line)
                             .transition(.opacity)
                     } else {
-                        Text(item.trackArtist).font(.caption).lottaLower().foregroundStyle(.secondary).lineLimit(1)
+                        Text(item.trackArtist).font(.caption).lottaLower().foregroundStyle(Theme.secondaryText).lineLimit(1)
                     }
                 }
                 .animation(.easeInOut(duration: 0.25), value: lyricLine)

@@ -76,7 +76,7 @@ struct DownloadIndicator: View {
         case .done:
             Image(systemName: "arrow.down.circle.fill")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
         case .downloading(let p):
             ProgressRing(progress: p).frame(width: 14, height: 14)
         case .queued:
@@ -118,7 +118,7 @@ struct TrackRow: View {
                     } else {
                         Text(track.indexNumber.map { String(format: "%02d", $0) } ?? "–")
                             .monospaced()
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                     }
                 }
                 .font(.subheadline.monospacedDigit())
@@ -134,18 +134,18 @@ struct TrackRow: View {
                     Text(track.trackArtist)
                         .font(.caption)
                         .lottaLower()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                         .lineLimit(1)
                 }
             }
 
             Spacer(minLength: 8)
-            if let badge { TechBadge(text: badge, tint: .secondary) }
+            if let badge { TechBadge(text: badge, tint: Theme.secondaryText) }
             DownloadIndicator(state: downloads.state(for: track.id))
             if let d = track.duration {
                 Text(formatTime(d))
                     .font(.subheadline.monospaced())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
             }
         }
         .opacity(isAvailable ? 1 : 0.35)
@@ -230,7 +230,7 @@ struct AlbumRow: View {
                 Text(album.title).lottaLower().lineLimit(1)
                 Text(subtitle ?? album.artistLine)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                     .lineLimit(1)
             }
             Spacer()
