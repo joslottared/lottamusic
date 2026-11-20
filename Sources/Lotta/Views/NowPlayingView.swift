@@ -393,37 +393,102 @@ struct Scrubber: View {
 
 struct QueueView: View {
     @EnvironmentObject private var player: Player
+    /// Carousel of covers by default; the list is where tracks are removed.
+    @AppStorage("lotta.queue.carousel") private var carousel = true
 
     var body: some View {
-        let start = player.index + 1
-        List {
-            Section {
-                if player.upNext.isEmpty {
-                    Text("No hay más canciones en la cola.").opacity(0.6)
-                }
-                ForEach(Array(player.upNext.enumerated()), id: \.offset) { offset, item in
-                    HStack(spacing: 12) {
-                        ArtworkView(itemId: item.artworkItemId, cornerRadius: 8).frame(width: 44, height: 44)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.title).lottaLower().lineLimit(1)
-                            Text(item.trackArtist).font(.caption).lottaLower().opacity(0.6).lineLimit(1)
-                        }
-                        Spacer()
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { player.jump(to: start + offset) }
-                    .swipeActions {
-                        Button(role: .destructive) { player.removeFromQueue(at: start + offset) } label: {
-                            Label("Quitar", systemImage: "minus.circle")
-                        }
-                    }
-                }
-                .listRowBackground(Color.clear)
-            } header: {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
                 Text("A continuación").lottaLabel().foregroundStyle(.white.opacity(0.7))
+                Spacer()
+                GlassCircleButton(systemImage: carousel ? "list.bullet" : "square.stack",
+                                  accessibilityLabel: carousel ? "Ver como lista" : "Ver como carrusel",
+                                  size: 44) {
+                    withAnimation(.easeInOut(duration: 0.25)) { carousel.toggle() }
+                }
             }
+            if player.upNext.isEmpty {
+                Text("No hay más canciones en la cola.")
+                    .opacity(0.6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if carousel {
+                QueueCarousel()
+                    .transition(.opacity)
+            } else {
+                queueList
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private var queueList: some View {
+        let start = player.index + 1
+        return List {
+            ForEach(Array(player.upNext.enumerated()), id: \.offset) { offset, item in
+                HStack(spacing: 12) {
+                    ArtworkView(itemId: item.artworkItemId, cornerRadius: 8).frame(width: 44, height: 44)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.title).lottaLower().lineLimit(1)
+                        Text(item.trackArtist).font(.caption).lottaLower().opacity(0.6).lineLimit(1)
+                    }
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { player.jump(to: start + offset) }
+                .swipeActions {
+                    Button(role: .destructive) { player.removeFromQueue(at: start + offset) } label: {
+                        Label("Quitar", systemImage: "minus.circle")
+                    }
+                }
+            }
+            .listRowBackground(Color.clear)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+    }
+}
+
+/// Up next as a 3D carousel of covers. Tapping one jumps to it.
+private struct QueueCarousel: View {
+    @EnvironmentObject private var player: Player
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let start = player.index + 1
+        GeometryReader { geo in
+            let side = max(80, min(geo.size.height - 70, geo.size.width * 0.62, 240))
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 14) {
+                    ForEach(Array(player.upNext.enumerated()), id: \.offset) { offset, item in
+                        Button { player.jump(to: start + offset) } label: {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ArtworkView(itemId: item.artworkItemId, cornerRadius: 22)
+                                    .frame(width: side, height: side)
+                                    .shadow(color: .black.opacity(0.45), radius: 18, y: 10)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.title).font(.subheadline.weight(.semibold)).lottaLower().lineLimit(1)
+                                    Text(item.trackArtist).font(.caption).lottaLower().opacity(0.6).lineLimit(1)
+                                }
+                                .frame(width: side, alignment: .leading)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(item.title), \(item.trackArtist)")
+                        .accessibilityHint("Reproducir ahora")
+                        .scrollTransition(.interactive, axis: .horizontal) { content, phase in
+                            content
+                                .rotation3DEffect(.degrees(reduceMotion ? 0 : phase.value * -32),
+                                                  axis: (x: 0, y: 1, z: 0), perspective: 0.6)
+                                .scaleEffect(1 - abs(phase.value) * 0.14)
+                                .opacity(1 - abs(phase.value) * 0.35)
+                        }
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .contentMargins(.horizontal, max(0, (geo.size.width - side) / 2), for: .scrollContent)
+            .frame(maxHeight: .infinity)
+        }
     }
 }
