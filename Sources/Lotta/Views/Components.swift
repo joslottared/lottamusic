@@ -76,7 +76,7 @@ struct DownloadIndicator: View {
         case .done:
             Image(systemName: "arrow.down.circle.fill")
                 .font(.caption)
-                .foregroundStyle(Theme.secondaryText)
+                .foregroundStyle(.secondary)
         case .downloading(let p):
             ProgressRing(progress: p).frame(width: 14, height: 14)
         case .queued:
@@ -94,8 +94,6 @@ struct DownloadIndicator: View {
 struct TrackRow: View {
     let track: BaseItem
     var showArtwork = false
-    /// Optional tag shown before the download indicator (e.g. "LRC").
-    var badge: String? = nil
 
     @EnvironmentObject private var downloads: DownloadManager
     @ObservedObject private var playback = PlaybackSignal.shared
@@ -116,9 +114,8 @@ struct TrackRow: View {
                             .symbolEffect(.variableColor.iterative, isActive: playback.isPlaying)
                             .foregroundStyle(.tint)
                     } else {
-                        Text(track.indexNumber.map { String(format: "%02d", $0) } ?? "–")
-                            .monospaced()
-                            .foregroundStyle(Theme.secondaryText)
+                        Text(track.indexNumber.map(String.init) ?? "–")
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .font(.subheadline.monospacedDigit())
@@ -127,25 +124,22 @@ struct TrackRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title)
-                    .lottaLower()
                     .foregroundStyle(isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
                     .lineLimit(1)
                 if showArtwork || track.trackArtist != track.albumArtist {
                     Text(track.trackArtist)
                         .font(.caption)
-                        .lottaLower()
-                        .foregroundStyle(Theme.secondaryText)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
 
             Spacer(minLength: 8)
-            if let badge { TechBadge(text: badge, tint: Theme.secondaryText) }
             DownloadIndicator(state: downloads.state(for: track.id))
             if let d = track.duration {
                 Text(formatTime(d))
-                    .font(.subheadline.monospaced())
-                    .foregroundStyle(Theme.secondaryText)
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
         }
         .opacity(isAvailable ? 1 : 0.35)
@@ -155,6 +149,7 @@ struct TrackRow: View {
 
 struct TrackContextMenu: ViewModifier {
     let track: BaseItem
+    /// Used only for actions: not observed, so playback progress doesn't redraw this view.
     private var player: Player { AppModel.shared.player }
     @EnvironmentObject private var downloads: DownloadManager
     @State private var addToPlaylist = false
@@ -211,7 +206,7 @@ struct ArtistRow: View {
             ArtworkView(itemId: artist.id)
                 .frame(width: 48, height: 48)
                 .clipShape(Circle())
-            Text(artist.title).lottaLower().lineLimit(1)
+            Text(artist.title).lineLimit(1)
             Spacer()
         }
         .contentShape(Rectangle())
@@ -227,10 +222,10 @@ struct AlbumRow: View {
             ArtworkView(itemId: album.id, cornerRadius: 6)
                 .frame(width: 56, height: 56)
             VStack(alignment: .leading, spacing: 2) {
-                Text(album.title).lottaLower().lineLimit(1)
+                Text(album.title).lineLimit(1)
                 Text(subtitle ?? album.artistLine)
                     .font(.caption)
-                    .foregroundStyle(Theme.secondaryText)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer()

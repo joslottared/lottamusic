@@ -5,15 +5,12 @@ enum LibraryTab: String, CaseIterable {
 }
 
 struct LibraryView: View {
-    @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var downloads: DownloadManager
     @EnvironmentObject private var network: NetworkMonitor
-    @Environment(\.selectTab) private var selectTab
     @AppStorage("lotta.library.tab") private var tab: LibraryTab = .albums
     @AppStorage("lotta.library.downloadedOnly") private var downloadedOnly = false
     @State private var showSettings = false
-    @State private var songCount = 0
 
     private var onlyDownloaded: Bool { downloadedOnly || !network.isOnline }
 
@@ -33,17 +30,20 @@ struct LibraryView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                serverCapsule
-
-                LibraryHero()
-
-                filterPills
+            VStack(spacing: 16) {
+                Picker("Sección", selection: $tab) {
+                    Text("Álbumes").tag(LibraryTab.albums)
+                    Text("Artistas").tag(LibraryTab.artists)
+                    Text("Playlists").tag(LibraryTab.playlists)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
 
                 if let sync = library.sync {
                     SyncProgressRow(sync: sync)
                         .padding(12)
-                        .lottaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(.horizontal)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
@@ -52,135 +52,60 @@ struct LibraryView: View {
                                              : "Sin conexión · mostrando tus descargas",
                           systemImage: network.hasNetwork ? "server.rack" : "wifi.slash")
                         .font(.footnote.weight(.medium))
-                        .foregroundStyle(Theme.secondaryText)
+                        .foregroundStyle(.secondary)
                 } else if let err = library.lastError, library.albums.isEmpty {
-                    Text(err).font(.footnote).foregroundStyle(.red)
+                    Text(err).font(.footnote).foregroundStyle(.red).padding(.horizontal)
                 }
 
-                Group {
-                    switch tab {
-                    case .albums:
-                        if albums.isEmpty { emptyState } else { AlbumGrid(albums: albums).padding(.horizontal, -16) }
-                    case .playlists:
-                        if playlists.isEmpty { emptyState } else { PlaylistList(playlists: playlists).padding(.horizontal, -16) }
-                    case .artists:
-                        if artists.isEmpty {
-                            emptyState
-                        } else {
-                            LazyVStack(spacing: 0) {
-                                ForEach(artists) { artist in
-                                    NavigationLink(value: artist) {
-                                        ArtistRow(artist: artist).padding(.vertical, 6)
-                                    }
-                                    .buttonStyle(.plain)
-                                    Divider().padding(.leading, 60)
+                switch tab {
+                case .albums:
+                    if albums.isEmpty { emptyState } else { AlbumGrid(albums: albums) }
+                case .playlists:
+                    if playlists.isEmpty { emptyState } else { PlaylistList(playlists: playlists) }
+                case .artists:
+                    if artists.isEmpty {
+                        emptyState
+                    } else {
+                        LazyVStack(spacing: 0) {
+                            ForEach(artists) { artist in
+                                NavigationLink(value: artist) {
+                                    ArtistRow(artist: artist).padding(.vertical, 6)
                                 }
+                                .buttonStyle(.plain)
+                                Divider().padding(.leading, 60)
                             }
                         }
+                        .padding(.horizontal)
                     }
                 }
-                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 16)
             .padding(.bottom, 20)
             .animation(.spring(response: 0.35), value: library.isSyncing)
         }
-        .scrollContentBackground(.hidden)
-        .background(Theme.background.ignoresSafeArea())
-        .foregroundStyle(Theme.ink)
-        .navigationTitle("biblioteca") // only shown as the back button
-        .toolbar(.hidden, for: .navigationBar)
+        .navigationTitle("Biblioteca")
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { downloadedOnly.toggle() } label: {
+                    Image(systemName: downloadedOnly ? "arrow.down.circle.fill" : "arrow.down.circle")
+                }
+                .accessibilityLabel("Solo descargado")
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if library.isSyncing {
+                    ProgressView()
+                } else {
+                    Button { library.startSync() } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(!network.isOnline)
+                    .accessibilityLabel("Sincronizar biblioteca")
+                }
+                Button { showSettings = true } label: { Image(systemName: "gearshape") }
+            }
+        }
         .refreshable { await library.refresh() }
         .task { if library.albums.isEmpty { await library.refresh() } }
-        .task(id: library.albums.count &+ (library.lastSync.map { Int($0.timeIntervalSince1970) } ?? 0)) {
-            songCount = library.albums.reduce(0) { $0 + library.cachedTracks(albumId: $1.id).count }
-        }
         .sheet(isPresented: $showSettings) { SettingsView() }
-    }
-
-    // MARK: Server capsule
-
-    private var statusColor: Color {
-        if network.isOnline { return .green }
-        return network.hasNetwork ? .orange : .gray
-    }
-
-    /// Said in words too, not only with the dot's color.
-    private var statusText: String {
-        let state = network.isOnline ? "En línea" : (network.hasNetwork ? "Sin servidor" : "Sin conexión")
-        return songCount > 0 ? "\(state) · \(songCount) canciones" : state
-    }
-
-    private var serverCapsule: some View {
-        GlassCapsule {
-            EmptyView()
-        } center: {
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 9, height: 9)
-                    .shadow(color: statusColor.opacity(0.8), radius: network.isOnline ? 4 : 0)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(model.creds?.serverURL.host ?? "Jellyfin")
-                        .font(.subheadline.weight(.semibold))
-                        .lottaLower()
-                        .lineLimit(1)
-                    Text(statusText).lottaLabel(mono: true).foregroundStyle(Theme.secondaryText)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.leading, 12)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Servidor \(model.creds?.serverURL.host ?? ""), \(network.isOnline ? "en línea" : "sin conexión"), \(songCount) canciones")
-        } trailing: {
-            if library.isSyncing {
-                ProgressView()
-                    .frame(width: 46, height: 46)
-                    .background(Circle().fill(Theme.insetFill))
-            } else {
-                GlassCircleButton(systemImage: "arrow.triangle.2.circlepath",
-                                  accessibilityLabel: "Sincronizar biblioteca", style: .inset) {
-                    library.startSync()
-                }
-                .disabled(!network.isOnline)
-            }
-            GlassCircleButton(systemImage: "magnifyingglass", accessibilityLabel: "Buscar", style: .inset) {
-                selectTab(.search)
-            }
-            GlassCircleButton(systemImage: "gearshape", accessibilityLabel: "Ajustes", style: .inset) {
-                showSettings = true
-            }
-        }
-    }
-
-    // MARK: Filters
-
-    private var filterPills: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                filterPill(.albums, "Álbumes", icon: "square.grid.2x2")
-                filterPill(.artists, "Artistas", icon: "music.mic")
-                filterPill(.playlists, "Playlists", icon: "music.note.list")
-                Button { downloadedOnly.toggle() } label: {
-                    GlassPill(systemImage: downloadedOnly ? "arrow.down.circle.fill" : "arrow.down.circle",
-                              title: "Descargado", isActive: downloadedOnly)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Solo descargado")
-                .accessibilityAddTraits(downloadedOnly ? .isSelected : [])
-            }
-            .padding(.vertical, 2)
-        }
-        .scrollClipDisabled()
-    }
-
-    private func filterPill(_ value: LibraryTab, _ title: String, icon: String) -> some View {
-        Button { tab = value } label: {
-            GlassPill(systemImage: icon, title: title, isActive: tab == value)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(tab == value ? .isSelected : [])
     }
 
     @ViewBuilder private var emptyState: some View {
@@ -198,108 +123,6 @@ struct LibraryView: View {
     }
 }
 
-/// Title + resume stack. Kept apart from LibraryView so the player's
-/// updates don't redraw the whole library.
-private struct LibraryHero: View {
-    @EnvironmentObject private var player: Player
-
-    var body: some View {
-        let hasCurrent = player.current != nil
-        VStack(alignment: .leading, spacing: 18) {
-            Text(hasCurrent ? "Sigue donde lo dejaste" : "Tu biblioteca")
-                .lottaEditorial(size: 44, weight: .heavy)
-                .lottaLower()
-                .lineLimit(2)
-                .minimumScaleFactor(0.7)
-                .padding(.top, 4)
-                .accessibilityAddTraits(.isHeader)
-            if hasCurrent { ResumeStack() }
-        }
-    }
-}
-
-/// Thin progress bar; the only part that follows the playback time.
-private struct ResumeProgress: View {
-    @EnvironmentObject private var player: Player
-
-    var body: some View {
-        GeometryReader { geo in
-            let f = player.duration > 0 ? min(1, player.currentTime / player.duration) : 0
-            ZStack(alignment: .leading) {
-                Capsule().fill(Theme.track)
-                Capsule().fill(Theme.accentMark).frame(width: geo.size.width * f)
-            }
-        }
-        .frame(height: 4)
-    }
-}
-
-/// Restored / current playback: three tilted covers and a glass panel to
-/// pick up where you left off.
-private struct ResumeStack: View {
-    @EnvironmentObject private var player: Player
-    @Environment(\.openPlayer) private var openPlayer
-
-    /// Current track first, then what comes next (or what came before).
-    private var covers: [BaseItem] {
-        guard let current = player.current else { return [] }
-        var out = [current]
-        for item in player.upNext where out.count < 3 && !out.contains(where: { $0.artworkItemId == item.artworkItemId }) {
-            out.append(item)
-        }
-        for item in player.queue.prefix(player.index).reversed() where out.count < 3
-            && !out.contains(where: { $0.artworkItemId == item.artworkItemId }) {
-            out.append(item)
-        }
-        return out
-    }
-
-    var body: some View {
-        if let item = player.current {
-            let covers = covers
-            HStack(alignment: .center, spacing: 14) {
-                ZStack {
-                    ForEach(Array(covers.enumerated().reversed()), id: \.offset) { i, cover in
-                        ArtworkView(itemId: cover.artworkItemId, cornerRadius: 16)
-                            .frame(width: 118, height: 118)
-                            .shadow(color: .black.opacity(0.4), radius: 12, y: 8)
-                            .rotationEffect(.degrees([-4, 8, -12][i]))
-                            .offset(x: CGFloat(i) * 14, y: CGFloat(i) * -6)
-                            .opacity(i == 0 ? 1 : 0.85)
-                    }
-                }
-                .frame(width: 150, height: 150)
-                .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Seguir").lottaLabel(tracking: 1.2).foregroundStyle(Theme.accentText)
-                    Text(item.title).font(.headline).lottaLower().lineLimit(2)
-                    Text(item.trackArtist).font(.subheadline).lottaLower().opacity(0.65).lineLimit(1)
-                    HStack(spacing: 10) {
-                        ResumeProgress()
-                        Button { player.togglePlayPause() } label: {
-                            Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                                .contentTransition(.symbolEffect(.replace))
-                                .font(.body.weight(.bold))
-                                .foregroundStyle(Theme.background)
-                                .frame(width: Theme.minTap, height: Theme.minTap)
-                                .background(Circle().fill(Theme.ink))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(player.isPlaying ? "Pausa" : "Seguir reproduciendo")
-                    }
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .lottaGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            }
-            .contentShape(Rectangle())
-            .onTapGesture(perform: openPlayer)
-            .accessibilityAction(named: "Abrir reproductor", openPlayer)
-        }
-    }
-}
-
 struct AlbumGrid: View {
     let albums: [BaseItem]
     @EnvironmentObject private var downloads: DownloadManager
@@ -310,21 +133,18 @@ struct AlbumGrid: View {
             ForEach(albums) { album in
                 NavigationLink(value: album) {
                     VStack(alignment: .leading, spacing: 6) {
-                        ArtworkView(itemId: album.id, cornerRadius: 14)
+                        ArtworkView(itemId: album.id)
                         Text(album.title)
-                            .font(.subheadline.weight(.semibold))
-                            .lottaLower()
+                            .font(.subheadline.weight(.medium))
                             .lineLimit(1)
                         HStack(spacing: 4) {
                             if downloadedIds.contains(album.id) {
                                 Image(systemName: "arrow.down.circle.fill").font(.caption2)
-                                    .foregroundStyle(Theme.accentMark)
-                                    .accessibilityLabel("Descargado")
                             }
-                            Text(album.artistLine).lottaLower().lineLimit(1)
+                            Text(album.artistLine).lineLimit(1)
                         }
                         .font(.caption)
-                        .foregroundStyle(Theme.secondaryText)
+                        .foregroundStyle(.secondary)
                     }
                 }
                 .buttonStyle(.plain)
@@ -339,28 +159,24 @@ struct AlbumView: View {
 
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var downloads: DownloadManager
-    /// Used only for actions: not observed, so playback progress doesn't redraw this screen.
+    /// Used only for actions: not observed, so playback progress doesn't redraw this view.
     private var player: Player { AppModel.shared.player }
     @State private var tracks: [BaseItem] = []
     @State private var loading = true
     @State private var addToPlaylist = false
-    @State private var syncedLyrics: Set<String> = []
 
     var body: some View {
         List {
             header
                 .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20))
 
             if loading && tracks.isEmpty {
-                HStack { Spacer(); ProgressView(); Spacer() }
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
+                HStack { Spacer(); ProgressView(); Spacer() }.listRowSeparator(.hidden)
             }
 
             ForEach(Array(tracks.enumerated()), id: \.element.id) { i, track in
-                TrackRow(track: track, badge: syncedLyrics.contains(track.id) ? "LRC" : nil)
+                TrackRow(track: track)
                     .onTapGesture { player.play(tracks, startAt: i) }
                     .trackContextMenu(track)
                     .swipeActions(edge: .trailing) {
@@ -372,18 +188,20 @@ struct AlbumView: View {
                             Button { downloads.download([track], album: album) } label: {
                                 Label("Descargar", systemImage: "arrow.down")
                             }
-                            .tint(Theme.accent)
+                            .tint(.lotta)
                         }
                     }
-                    .listRowBackground(Color.clear)
-                    .listRowSeparatorTint(Theme.separator)
+            }
+
+            if !tracks.isEmpty {
+                Text(footer)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .listRowSeparator(.hidden)
+                    .padding(.top, 8)
             }
         }
         .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(Theme.background.ignoresSafeArea())
-        .foregroundStyle(Theme.ink)
-        .tint(Theme.accentText)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -401,57 +219,45 @@ struct AlbumView: View {
             if !fresh.isEmpty { tracks = fresh }
             loading = false
         }
-        .task(id: tracks.map(\.id)) {
-            syncedLyrics = await CachedLyricsPeek.syncedIds(tracks.map(\.id))
-        }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ZStack(alignment: .leading) {
-                VinylDisc()
-                    .frame(width: 210, height: 210)
-                    .offset(x: 92)
-                ArtworkView(itemId: album.id, size: ArtworkSize.large, cornerRadius: 6)
-                    .frame(width: 230, height: 230)
-                    .shadow(color: .black.opacity(0.25), radius: 18, y: 10)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 8)
-
-            VStack(alignment: .leading, spacing: 6) {
+        VStack(spacing: 14) {
+            ArtworkView(itemId: album.id, size: ArtworkSize.large, cornerRadius: 10)
+                .frame(maxWidth: 250)
+                .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
+            VStack(spacing: 4) {
                 Text(album.title)
-                    .lottaEditorial(size: 40, weight: .heavy)
-                    .lottaLower()
-                    .foregroundStyle(Theme.ink)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityAddTraits(.isHeader)
+                    .font(.title2.bold())
+                    .multilineTextAlignment(.center)
                 Text(album.artistLine)
-                    .font(.title3.weight(.semibold))
-                    .lottaLower()
-                    .foregroundStyle(Theme.accentText)
-                Text(dataLine)
-                    .lottaLabel(mono: true, tracking: 1.0)
-                    .foregroundStyle(Theme.secondaryText)
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+                    .multilineTextAlignment(.center)
+                if let y = album.productionYear {
+                    Text(String(y)).font(.footnote).foregroundStyle(.secondary)
+                }
             }
-
-            EditorialButtons(disabled: tracks.isEmpty,
-                             play: { player.play(tracks) },
-                             shuffle: { player.play(tracks, shuffle: true) })
+            HStack(spacing: 12) {
+                Button { player.play(tracks) } label: {
+                    Label("Reproducir", systemImage: "play.fill").frame(maxWidth: .infinity)
+                }
+                Button { player.play(tracks, shuffle: true) } label: {
+                    Label("Aleatorio", systemImage: "shuffle").frame(maxWidth: .infinity)
+                }
+            }
+            .font(.body.weight(.semibold))
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .disabled(tracks.isEmpty)
         }
+        .frame(maxWidth: .infinity)
         .padding(.top, 8)
     }
 
-    /// "2019 · 11 pistas · 46 min"
-    private var dataLine: String {
-        var parts: [String] = []
-        if let y = album.productionYear { parts.append(String(y)) }
-        if !tracks.isEmpty {
-            let minutes = Int(tracks.compactMap(\.duration).reduce(0, +) / 60)
-            parts.append("\(tracks.count) pistas")
-            parts.append("\(minutes) min")
-        }
-        return parts.joined(separator: " · ")
+    private var footer: String {
+        let minutes = Int(tracks.compactMap(\.duration).reduce(0, +) / 60)
+        return "\(tracks.count) canciones · \(minutes) min"
     }
 
     @ViewBuilder private var downloadButton: some View {
@@ -479,145 +285,41 @@ struct AlbumView: View {
     }
 }
 
-/// "reproducir" (filled) and "aleatorio" (outline) for the light editorial screens.
-private struct EditorialButtons: View {
-    var disabled: Bool
-    var play: () -> Void
-    var shuffle: () -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Button(action: play) {
-                Label("Reproducir", systemImage: "play.fill")
-                    .lottaLower()
-                    .frame(maxWidth: .infinity, minHeight: 50)
-                    .foregroundStyle(.white)
-                    .background(Capsule().fill(Theme.accent))
-            }
-            Button(action: shuffle) {
-                Label("Aleatorio", systemImage: "shuffle")
-                    .lottaLower()
-                    .frame(maxWidth: .infinity, minHeight: 50)
-                    .foregroundStyle(Theme.ink)
-                    .overlay(Capsule().stroke(Theme.ink, lineWidth: 1.5))
-            }
-        }
-        .font(.body.weight(.semibold))
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .opacity(disabled ? 0.45 : 1)
-    }
-}
-
-/// Reads the lyrics cache on disk (never the network) to tell which tracks
-/// already have synced lyrics, for the LRC tag.
-enum CachedLyricsPeek {
-    private struct Entry: Decodable { var lyrics: Lyrics? }
-
-    static func syncedIds(_ ids: [String]) async -> Set<String> {
-        let dir = Storage.lyrics
-        return await Task.detached(priority: .utility) {
-            var out = Set<String>()
-            for id in ids {
-                let file = dir.appendingPathComponent(id + ".json")
-                guard let data = try? Data(contentsOf: file),
-                      let entry = try? JSONDecoder().decode(Entry.self, from: data),
-                      entry.lyrics?.isSynced == true else { continue }
-                out.insert(id)
-            }
-            return out
-        }.value
-    }
-}
-
 struct ArtistView: View {
     let artist: BaseItem
     @EnvironmentObject private var library: LibraryStore
-    /// Used only for actions: not observed, so playback progress doesn't redraw this screen.
+    /// Used only for actions: not observed, so playback progress doesn't redraw this view.
     private var player: Player { AppModel.shared.player }
     @State private var albums: [BaseItem] = []
     @State private var tracks: [BaseItem] = []
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text(artist.title)
-                    .lottaEditorial(size: 104, weight: .black)
-                    .lottaLower()
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    // Runs off the right edge on purpose.
-                    .padding(.trailing, -140)
-                    .accessibilityAddTraits(.isHeader)
-
-                if !dataLine.isEmpty {
-                    Text(dataLine)
-                        .lottaLabel(mono: true, tracking: 1.0)
-                        .foregroundStyle(Theme.secondaryText)
-                }
-
-                EditorialButtons(disabled: tracks.isEmpty,
-                                 play: { player.play(tracks) },
-                                 shuffle: { player.play(tracks, shuffle: true) })
-
-                if !albums.isEmpty {
-                    HStack {
-                        Text("Discografía").lottaLabel(tracking: 1.2).foregroundStyle(Theme.plum)
-                        Spacer()
-                        Text("\(albums.count)").lottaLabel(mono: true).foregroundStyle(Theme.secondaryText)
-                    }
-                    .padding(.top, 8)
-
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(albums.enumerated()), id: \.element.id) { i, album in
-                            NavigationLink(value: album) {
-                                HStack(spacing: 14) {
-                                    Text(String(format: "%02d", i + 1))
-                                        .font(.subheadline.monospaced())
-                                        .foregroundStyle(Theme.secondaryText)
-                                        .frame(minWidth: 26, alignment: .leading)
-                                    ArtworkView(itemId: album.id, cornerRadius: 4)
-                                        .frame(width: 48, height: 48)
-                                    Text(album.title)
-                                        .font(.body.weight(.semibold))
-                                        .lottaLower()
-                                        .foregroundStyle(Theme.ink)
-                                        .lineLimit(2)
-                                    Spacer(minLength: 8)
-                                    if let y = album.productionYear {
-                                        Text(String(y))
-                                            .font(.caption.monospaced())
-                                            .foregroundStyle(Theme.secondaryText)
-                                    }
-                                }
-                                .padding(.vertical, 8)
-                                .frame(minHeight: Theme.minTap)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            Divider().overlay(Theme.separator)
+            VStack(spacing: 20) {
+                VStack(spacing: 12) {
+                    ArtworkView(itemId: artist.id, size: ArtworkSize.large)
+                        .frame(width: 170, height: 170)
+                        .clipShape(Circle())
+                        .shadow(color: .black.opacity(0.15), radius: 12, y: 6)
+                    Text(artist.title).font(.title.bold()).multilineTextAlignment(.center)
+                    HStack(spacing: 12) {
+                        Button { player.play(tracks) } label: {
+                            Label("Reproducir", systemImage: "play.fill").frame(maxWidth: .infinity)
+                        }
+                        Button { player.play(tracks, shuffle: true) } label: {
+                            Label("Aleatorio", systemImage: "shuffle").frame(maxWidth: .infinity)
                         }
                     }
+                    .font(.body.weight(.semibold))
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(tracks.isEmpty)
                 }
+                .padding(.horizontal)
+                AlbumGrid(albums: albums)
             }
-            .padding(.horizontal, 20)
             .padding(.vertical)
         }
-        .scrollContentBackground(.hidden)
-        .background(alignment: .bottomTrailing) {
-            ZStack(alignment: .bottomTrailing) {
-                Theme.background
-                VinylDisc(labelColor: Theme.plum)
-                    .frame(width: 260, height: 260)
-                    .offset(x: 90, y: 70)
-                    .opacity(0.9)
-            }
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
-        }
-        .tint(Theme.accentText)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             albums = await library.albums(for: artist)
@@ -625,20 +327,8 @@ struct ArtistView: View {
         }
     }
 
-    /// "5 álbumes · 62 pistas · 2009–2023"
-    private var dataLine: String {
-        var parts: [String] = []
-        if !albums.isEmpty { parts.append("\(albums.count) \(albums.count == 1 ? "álbum" : "álbumes")") }
-        if !tracks.isEmpty { parts.append("\(tracks.count) pistas") }
-        let years = albums.compactMap(\.productionYear)
-        if let lo = years.min(), let hi = years.max() {
-            parts.append(lo == hi ? String(lo) : "\(lo)–\(hi)")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    /// All of the artist's tracks, album by album: cached tracklists first,
-    /// fetching (and caching) the ones we haven't seen yet.
+    /// All of the artist's tracks, album by album (oldest first): cached
+    /// tracklists, fetching (and caching) the ones not seen yet.
     private func artistTracks() async -> [BaseItem] {
         let ordered = albums.sorted { ($0.productionYear ?? 0) < ($1.productionYear ?? 0) }
         var out: [BaseItem] = []
@@ -652,7 +342,7 @@ struct ArtistView: View {
 
 struct DownloadsView: View {
     @EnvironmentObject private var downloads: DownloadManager
-    /// Used only for actions: not observed, so playback progress doesn't redraw this screen.
+    /// Used only for actions: not observed, so playback progress doesn't redraw this view.
     private var player: Player { AppModel.shared.player }
 
     var body: some View {
@@ -661,13 +351,13 @@ struct DownloadsView: View {
         let pending = downloads.pending.values.sorted { $0.title < $1.title }
         List {
             if !pending.isEmpty {
-                Section(header: LottaListHeader("Descargando")) {
+                Section("Descargando") {
                     ForEach(pending) { item in
                         HStack(spacing: 12) {
                             ArtworkView(itemId: item.artworkItemId, cornerRadius: 4).frame(width: 40, height: 40)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(item.title).lottaLower().lineLimit(1)
-                                Text(item.trackArtist).font(.caption).lottaLower().foregroundStyle(Theme.secondaryText).lineLimit(1)
+                                Text(item.title).lineLimit(1)
+                                Text(item.trackArtist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             }
                             Spacer()
                             DownloadIndicator(state: downloads.state(for: item.id))
@@ -680,7 +370,7 @@ struct DownloadsView: View {
             }
 
             if !playlists.isEmpty {
-                Section(header: LottaListHeader("Playlists")) {
+                Section("Playlists") {
                     ForEach(playlists) { p in
                         NavigationLink(value: p) {
                             AlbumRow(album: p, subtitle: "\(downloads.tracks(inPlaylist: p.id).count) canciones")
@@ -707,7 +397,7 @@ struct DownloadsView: View {
                         }
                     }
                 } header: {
-                    LottaListHeader("\(downloads.downloaded.count) canciones · \(ByteCountFormatter.string(fromByteCount: downloads.totalBytes, countStyle: .file))", mono: true)
+                    Text("\(downloads.downloaded.count) canciones · \(ByteCountFormatter.string(fromByteCount: downloads.totalBytes, countStyle: .file))")
                 }
             }
         }
@@ -718,8 +408,7 @@ struct DownloadsView: View {
                                        description: Text("Toca ↓ en un álbum para tenerlo sin conexión."))
             }
         }
-        .lottaScreen()
-        .navigationTitle("descargas")
+        .navigationTitle("Descargas")
         .toolbar {
             if !downloads.downloaded.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -735,7 +424,7 @@ struct DownloadsView: View {
 
 struct SearchView: View {
     @EnvironmentObject private var library: LibraryStore
-    /// Used only for actions: not observed, so playback progress doesn't redraw this screen.
+    /// Used only for actions: not observed, so playback progress doesn't redraw this view.
     private var player: Player { AppModel.shared.player }
     @State private var query = ""
     @State private var results: [BaseItem] = []
@@ -748,31 +437,27 @@ struct SearchView: View {
         let playlists = results.filter(\.isPlaylist)
         List {
             if !artists.isEmpty {
-                Section(header: LottaListHeader("Artistas")) {
+                Section("Artistas") {
                     ForEach(artists) { a in NavigationLink(value: a) { ArtistRow(artist: a) } }
-                        .listRowBackground(Color.clear)
                 }
             }
             if !albums.isEmpty {
-                Section(header: LottaListHeader("Álbumes")) {
+                Section("Álbumes") {
                     ForEach(albums) { a in NavigationLink(value: a) { AlbumRow(album: a) } }
-                        .listRowBackground(Color.clear)
                 }
             }
             if !playlists.isEmpty {
-                Section(header: LottaListHeader("Playlists")) {
+                Section("Playlists") {
                     ForEach(playlists) { p in NavigationLink(value: p) { AlbumRow(album: p, subtitle: "Playlist") } }
-                        .listRowBackground(Color.clear)
                 }
             }
             if !songs.isEmpty {
-                Section(header: LottaListHeader("Canciones")) {
+                Section("Canciones") {
                     ForEach(Array(songs.enumerated()), id: \.element.id) { i, s in
                         TrackRow(track: s, showArtwork: true)
                             .onTapGesture { player.play(songs, startAt: i) }
                             .trackContextMenu(s)
                     }
-                    .listRowBackground(Color.clear)
                 }
             }
         }
@@ -786,8 +471,7 @@ struct SearchView: View {
             }
         }
         .searchable(text: $query, prompt: "Artistas, álbumes o canciones")
-        .lottaScreen()
-        .navigationTitle("buscar")
+        .navigationTitle("Buscar")
         .task(id: query) {
             guard query.count >= 2 else { results = []; return }
             try? await Task.sleep(for: .milliseconds(300))
@@ -806,7 +490,6 @@ struct SettingsView: View {
     @EnvironmentObject private var downloads: DownloadManager
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var network: NetworkMonitor
-    @AppStorage(AppAppearance.storageKey) private var appearance: AppAppearance = .system
     @AppStorage(AppSettings.autoSyncKey) private var autoSync = false
     @AppStorage(AppSettings.syncArtworkKey) private var syncArtwork = true
     @AppStorage(AppSettings.lrclibKey) private var lrclib = true
@@ -825,16 +508,6 @@ struct SettingsView: View {
                         LabeledContent("Servidor", value: c.serverURL.host ?? c.serverURL.absoluteString)
                         LabeledContent("Usuario", value: c.userName)
                     }
-                }
-
-                Section {
-                    Picker("Apariencia", selection: $appearance) {
-                        ForEach(AppAppearance.allCases) { Text($0.label).tag($0) }
-                    }
-                } header: {
-                    Text("Apariencia")
-                } footer: {
-                    Text("“Sistema” sigue el modo claro u oscuro del iPhone. El reproductor siempre es oscuro.")
                 }
 
                 Section {
@@ -912,7 +585,6 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Ajustes")
-            .lottaAppearance()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Listo") { dismiss() } }
@@ -945,7 +617,7 @@ struct SyncProgressRow: View {
                 ProgressView().controlSize(.small)
                 Text("Sincronizando · \(sync.phase)")
                     .font(.footnote.weight(.medium))
-                    .foregroundStyle(Theme.secondaryText)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .contentTransition(.numericText())
             }

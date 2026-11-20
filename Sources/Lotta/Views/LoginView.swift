@@ -64,8 +64,6 @@ struct LoginView: View {
                 }
             }
         }
-        .tint(Theme.accentText)
-        .lottaAppearance()
     }
 
     private func submit() async {

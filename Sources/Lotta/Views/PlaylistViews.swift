@@ -11,7 +11,7 @@ struct PlaylistList: View {
                     HStack(spacing: 12) {
                         ArtworkView(itemId: p.id, cornerRadius: 6).frame(width: 56, height: 56)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(p.title).lottaLower().lineLimit(1)
+                            Text(p.title).lineLimit(1)
                             HStack(spacing: 4) {
                                 if downloads.playlistInfo[p.id] != nil {
                                     Image(systemName: "arrow.down.circle.fill").font(.caption2)
@@ -19,7 +19,7 @@ struct PlaylistList: View {
                                 Text(p.childCount.map { "\($0) canciones" } ?? "Playlist")
                             }
                             .font(.caption)
-                            .foregroundStyle(Theme.secondaryText)
+                            .foregroundStyle(.secondary)
                         }
                         Spacer()
                         Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
@@ -40,6 +40,7 @@ struct PlaylistView: View {
 
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var downloads: DownloadManager
+    /// Used only for actions: not observed, so playback progress doesn't redraw this view.
     private var player: Player { AppModel.shared.player }
     @EnvironmentObject private var network: NetworkMonitor
     @State private var tracks: [BaseItem] = []
@@ -50,7 +51,6 @@ struct PlaylistView: View {
         List {
             header
                 .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20))
 
             if loading && tracks.isEmpty {
@@ -58,7 +58,7 @@ struct PlaylistView: View {
             } else if tracks.isEmpty {
                 Text("Esta playlist está vacía. Añade canciones desde el menú de cualquier canción.")
                     .font(.footnote)
-                    .foregroundStyle(Theme.secondaryText)
+                    .foregroundStyle(.secondary)
                     .listRowSeparator(.hidden)
             }
 
@@ -73,7 +73,6 @@ struct PlaylistView: View {
                             }
                         }
                     }
-                    .listRowBackground(Color.clear)
             }
 
             if let error {
@@ -81,8 +80,6 @@ struct PlaylistView: View {
             }
         }
         .listStyle(.plain)
-        .lottaScreen()
-        .tint(Theme.accentText)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { downloadButton }
@@ -113,35 +110,25 @@ struct PlaylistView: View {
 
     private var header: some View {
         VStack(spacing: 14) {
-            ArtworkView(itemId: playlist.id, size: ArtworkSize.large, cornerRadius: 24)
+            ArtworkView(itemId: playlist.id, size: ArtworkSize.large, cornerRadius: 10)
                 .frame(maxWidth: 230)
-                .shadow(color: .black.opacity(0.45), radius: 22, y: 12)
-            VStack(spacing: 6) {
-                Text(playlist.title)
-                    .lottaEditorial(size: 36, weight: .heavy)
-                    .lottaLower()
-                    .multilineTextAlignment(.center)
-                Text(subtitle).lottaLabel(mono: true).foregroundStyle(Theme.secondaryText)
+                .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
+            VStack(spacing: 4) {
+                Text(playlist.title).font(.title2.bold()).multilineTextAlignment(.center)
+                Text(subtitle).font(.footnote).foregroundStyle(.secondary)
             }
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 Button { player.play(tracks) } label: {
-                    Label("Reproducir", systemImage: "play.fill")
-                        .lottaLower()
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .foregroundStyle(.white)
-                        .background(Capsule().fill(Theme.accent))
+                    Label("Reproducir", systemImage: "play.fill").frame(maxWidth: .infinity)
                 }
                 Button { player.play(tracks, shuffle: true) } label: {
-                    Label("Aleatorio", systemImage: "shuffle")
-                        .lottaLower()
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .lottaGlass(in: Capsule(), interactive: true)
+                    Label("Aleatorio", systemImage: "shuffle").frame(maxWidth: .infinity)
                 }
             }
             .font(.body.weight(.semibold))
-            .buttonStyle(.plain)
+            .buttonStyle(.bordered)
+            .controlSize(.large)
             .disabled(tracks.isEmpty)
-            .opacity(tracks.isEmpty ? 0.45 : 1)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
