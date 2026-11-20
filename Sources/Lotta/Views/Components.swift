@@ -69,6 +69,8 @@ struct DownloadIndicator: View {
 struct TrackRow: View {
     let track: BaseItem
     var showArtwork = false
+    /// Optional tag shown before the download indicator (e.g. "LRC").
+    var badge: String? = nil
 
     @EnvironmentObject private var downloads: DownloadManager
     @EnvironmentObject private var player: Player
@@ -89,7 +91,8 @@ struct TrackRow: View {
                             .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
                             .foregroundStyle(.tint)
                     } else {
-                        Text(track.indexNumber.map(String.init) ?? "–")
+                        Text(track.indexNumber.map { String(format: "%02d", $0) } ?? "–")
+                            .monospaced()
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -99,21 +102,24 @@ struct TrackRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title)
+                    .lottaLower()
                     .foregroundStyle(isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
                     .lineLimit(1)
                 if showArtwork || track.trackArtist != track.albumArtist {
                     Text(track.trackArtist)
                         .font(.caption)
+                        .lottaLower()
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
 
             Spacer(minLength: 8)
+            if let badge { TechBadge(text: badge, tint: .secondary) }
             DownloadIndicator(state: downloads.state(for: track.id))
             if let d = track.duration {
                 Text(formatTime(d))
-                    .font(.subheadline.monospacedDigit())
+                    .font(.subheadline.monospaced())
                     .foregroundStyle(.secondary)
             }
         }
