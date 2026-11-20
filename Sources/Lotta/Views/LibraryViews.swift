@@ -53,6 +53,12 @@ struct LibraryView: View {
                           systemImage: network.hasNetwork ? "server.rack" : "wifi.slash")
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(.secondary)
+                } else if downloadedOnly {
+                    // Make the filter obvious (and easy to turn off).
+                    Button { downloadedOnly = false } label: {
+                        Label("Mostrando solo lo descargado · Ver todo", systemImage: "arrow.down.circle.fill")
+                            .font(.footnote.weight(.medium))
+                    }
                 } else if let err = library.lastError, library.albums.isEmpty {
                     Text(err).font(.footnote).foregroundStyle(.red).padding(.horizontal)
                 }
