@@ -1,3 +1,4 @@
+import CoreImage
 import SwiftUI
 
 // MARK: - Palette
@@ -94,6 +95,32 @@ extension View {
                         relativeTo style: Font.TextStyle = .largeTitle) -> some View {
         modifier(LottaEditorialTitle(size: size, weight: weight,
                                      tracking: tracking ?? -size * 0.035, relativeTo: style))
+    }
+}
+
+// MARK: - Screens
+
+/// Uppercase section header for lists.
+struct LottaListHeader: View {
+    let text: String
+    var mono = false
+    init(_ text: String, mono: Bool = false) { self.text = text; self.mono = mono }
+
+    var body: some View {
+        Text(text).lottaLabel(mono: mono, tracking: 1.0).foregroundStyle(.white.opacity(0.6))
+    }
+}
+
+extension View {
+    /// Dark glass screen (library, downloads, search): dark background,
+    /// dark navigation bar and controls.
+    func lottaDarkScreen() -> some View {
+        self
+            .scrollContentBackground(.hidden)
+            .background(Theme.darkBackground.ignoresSafeArea())
+            .environment(\.colorScheme, .dark)
+            .toolbarBackground(Theme.darkBackground, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
     }
 }
 
@@ -237,8 +264,11 @@ struct TechBadge: View {
 }
 
 /// The current artwork, heavily blurred, under a dark gradient.
+/// The blur is computed once per cover on a tiny copy (cheap) instead of
+/// a live full-screen blur filter, which is expensive to redraw.
 struct AmbientBackground: View {
     let itemId: String?
+    /// Blur radius in points at full-screen size (50 or more).
     var blurRadius: CGFloat = 60
     @State private var image: UIImage?
 
@@ -249,9 +279,8 @@ struct AmbientBackground: View {
                 if let image {
                     Image(uiImage: image)
                         .resizable()
+                        .interpolation(.high)
                         .scaledToFill()
-                        .blur(radius: blurRadius, opaque: true)
-                        .saturation(1.3)
                         .transition(.opacity)
                 }
             }
@@ -261,14 +290,49 @@ struct AmbientBackground: View {
         }
         .ignoresSafeArea()
         .accessibilityHidden(true)
+        .allowsHitTesting(false)
         .task(id: itemId) {
             guard let itemId else {
                 withAnimation(.easeInOut(duration: 0.6)) { image = nil }
                 return
             }
-            let img = await ArtworkCache.shared.image(for: itemId, size: ArtworkSize.small)
+            let img = await AmbientBlur.image(for: itemId, radius: blurRadius)
             withAnimation(.easeInOut(duration: 0.6)) { image = img }
         }
+    }
+}
+
+@MainActor
+private enum AmbientBlur {
+    private static var cache: [String: UIImage] = [:]
+    private static var order: [String] = []
+
+    static func image(for itemId: String, radius: CGFloat) async -> UIImage? {
+        if let hit = cache[itemId] { return hit }
+        guard let source = await ArtworkCache.shared.image(for: itemId, size: ArtworkSize.small),
+              let cg = source.cgImage else { return nil }
+        let out = await Task.detached(priority: .userInitiated) { blur(cg, radius: radius) }.value
+        if let out {
+            cache[itemId] = out
+            order.append(itemId)
+            if order.count > 12 { cache[order.removeFirst()] = nil }
+        }
+        return out
+    }
+
+    /// Downscale to ~64 px and blur there. Shown full screen, a sigma of
+    /// radius/7 at that size is roughly a `radius`-point blur.
+    nonisolated private static func blur(_ cg: CGImage, radius: CGFloat) -> UIImage? {
+        let input = CIImage(cgImage: cg)
+        let scale = 64 / max(input.extent.width, 1)
+        let small = input.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let blurred = small.clampedToExtent()
+            .applyingGaussianBlur(sigma: Double(radius) / 7)
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 1.3])
+            .cropped(to: small.extent)
+        let ctx = CIContext(options: [.useSoftwareRenderer: false])
+        guard let out = ctx.createCGImage(blurred, from: small.extent) else { return nil }
+        return UIImage(cgImage: out)
     }
 }
 

@@ -40,7 +40,7 @@ struct PlaylistView: View {
 
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var downloads: DownloadManager
-    @EnvironmentObject private var player: Player
+    private var player: Player { AppModel.shared.player }
     @EnvironmentObject private var network: NetworkMonitor
     @State private var tracks: [BaseItem] = []
     @State private var loading = true
@@ -50,6 +50,7 @@ struct PlaylistView: View {
         List {
             header
                 .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20))
 
             if loading && tracks.isEmpty {
@@ -72,6 +73,7 @@ struct PlaylistView: View {
                             }
                         }
                     }
+                    .listRowBackground(Color.clear)
             }
 
             if let error {
@@ -79,6 +81,8 @@ struct PlaylistView: View {
             }
         }
         .listStyle(.plain)
+        .lottaDarkScreen()
+        .tint(Theme.accentMark)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { downloadButton }
@@ -109,25 +113,35 @@ struct PlaylistView: View {
 
     private var header: some View {
         VStack(spacing: 14) {
-            ArtworkView(itemId: playlist.id, size: ArtworkSize.large, cornerRadius: 10)
+            ArtworkView(itemId: playlist.id, size: ArtworkSize.large, cornerRadius: 24)
                 .frame(maxWidth: 230)
-                .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
-            VStack(spacing: 4) {
-                Text(playlist.title).font(.title2.bold()).multilineTextAlignment(.center)
-                Text(subtitle).font(.footnote).foregroundStyle(.secondary)
+                .shadow(color: .black.opacity(0.45), radius: 22, y: 12)
+            VStack(spacing: 6) {
+                Text(playlist.title)
+                    .lottaEditorial(size: 36, weight: .heavy)
+                    .lottaLower()
+                    .multilineTextAlignment(.center)
+                Text(subtitle).lottaLabel(mono: true).foregroundStyle(.secondary)
             }
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Button { player.play(tracks) } label: {
-                    Label("Reproducir", systemImage: "play.fill").frame(maxWidth: .infinity)
+                    Label("Reproducir", systemImage: "play.fill")
+                        .lottaLower()
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .foregroundStyle(.white)
+                        .background(Capsule().fill(Theme.accent))
                 }
                 Button { player.play(tracks, shuffle: true) } label: {
-                    Label("Aleatorio", systemImage: "shuffle").frame(maxWidth: .infinity)
+                    Label("Aleatorio", systemImage: "shuffle")
+                        .lottaLower()
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .lottaGlass(in: Capsule(), interactive: true)
                 }
             }
             .font(.body.weight(.semibold))
-            .buttonStyle(.bordered)
-            .controlSize(.large)
+            .buttonStyle(.plain)
             .disabled(tracks.isEmpty)
+            .opacity(tracks.isEmpty ? 0.45 : 1)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 8)

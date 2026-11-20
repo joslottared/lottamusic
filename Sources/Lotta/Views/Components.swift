@@ -1,5 +1,30 @@
 import AVKit
+import Combine
 import SwiftUI
+
+/// Only the current track id and play/pause, without the 4-per-second time
+/// updates, so long track lists don't redraw while music plays.
+@MainActor
+final class PlaybackSignal: ObservableObject {
+    static let shared = PlaybackSignal()
+    @Published private(set) var currentId: String?
+    @Published private(set) var isPlaying = false
+    private var bag = Set<AnyCancellable>()
+
+    private init() {
+        let p = AppModel.shared.player
+        currentId = p.current?.id
+        isPlaying = p.isPlaying
+        p.$queue.combineLatest(p.$index)
+            .map { q, i in q.indices.contains(i) ? q[i].id : nil }
+            .removeDuplicates()
+            .sink { [weak self] in self?.currentId = $0 }
+            .store(in: &bag)
+        p.$isPlaying.removeDuplicates()
+            .sink { [weak self] in self?.isPlaying = $0 }
+            .store(in: &bag)
+    }
+}
 
 struct ArtworkView: View {
     let itemId: String?
@@ -73,10 +98,10 @@ struct TrackRow: View {
     var badge: String? = nil
 
     @EnvironmentObject private var downloads: DownloadManager
-    @EnvironmentObject private var player: Player
+    @ObservedObject private var playback = PlaybackSignal.shared
     @EnvironmentObject private var network: NetworkMonitor
 
-    private var isCurrent: Bool { player.current?.id == track.id }
+    private var isCurrent: Bool { playback.currentId == track.id }
     private var isAvailable: Bool { network.isOnline || downloads.isDownloaded(track.id) }
 
     var body: some View {
@@ -88,7 +113,7 @@ struct TrackRow: View {
                 Group {
                     if isCurrent {
                         Image(systemName: "waveform")
-                            .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
+                            .symbolEffect(.variableColor.iterative, isActive: playback.isPlaying)
                             .foregroundStyle(.tint)
                     } else {
                         Text(track.indexNumber.map { String(format: "%02d", $0) } ?? "–")
@@ -130,7 +155,7 @@ struct TrackRow: View {
 
 struct TrackContextMenu: ViewModifier {
     let track: BaseItem
-    @EnvironmentObject private var player: Player
+    private var player: Player { AppModel.shared.player }
     @EnvironmentObject private var downloads: DownloadManager
     @State private var addToPlaylist = false
 

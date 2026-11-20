@@ -9,8 +9,6 @@ struct LibraryView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var downloads: DownloadManager
     @EnvironmentObject private var network: NetworkMonitor
-    @EnvironmentObject private var player: Player
-    @Environment(\.openPlayer) private var openPlayer
     @Environment(\.selectTab) private var selectTab
     @AppStorage("lotta.library.tab") private var tab: LibraryTab = .albums
     @AppStorage("lotta.library.downloadedOnly") private var downloadedOnly = false
@@ -38,17 +36,7 @@ struct LibraryView: View {
             VStack(alignment: .leading, spacing: 18) {
                 serverCapsule
 
-                Text(player.current != nil ? "Sigue donde lo dejaste" : "Tu biblioteca")
-                    .lottaEditorial(size: 44, weight: .heavy)
-                    .lottaLower()
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.7)
-                    .padding(.top, 4)
-                    .accessibilityAddTraits(.isHeader)
-
-                if player.current != nil {
-                    ResumeStack()
-                }
+                LibraryHero()
 
                 filterPills
 
@@ -207,6 +195,42 @@ struct LibraryView: View {
     }
 }
 
+/// Title + resume stack. Kept apart from LibraryView so the player's
+/// updates don't redraw the whole library.
+private struct LibraryHero: View {
+    @EnvironmentObject private var player: Player
+
+    var body: some View {
+        let hasCurrent = player.current != nil
+        VStack(alignment: .leading, spacing: 18) {
+            Text(hasCurrent ? "Sigue donde lo dejaste" : "Tu biblioteca")
+                .lottaEditorial(size: 44, weight: .heavy)
+                .lottaLower()
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+                .padding(.top, 4)
+                .accessibilityAddTraits(.isHeader)
+            if hasCurrent { ResumeStack() }
+        }
+    }
+}
+
+/// Thin progress bar; the only part that follows the playback time.
+private struct ResumeProgress: View {
+    @EnvironmentObject private var player: Player
+
+    var body: some View {
+        GeometryReader { geo in
+            let f = player.duration > 0 ? min(1, player.currentTime / player.duration) : 0
+            ZStack(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.2))
+                Capsule().fill(Theme.accentMark).frame(width: geo.size.width * f)
+            }
+        }
+        .frame(height: 4)
+    }
+}
+
 /// Restored / current playback: three tilted covers and a glass panel to
 /// pick up where you left off.
 private struct ResumeStack: View {
@@ -249,14 +273,7 @@ private struct ResumeStack: View {
                     Text(item.title).font(.headline).lottaLower().lineLimit(2)
                     Text(item.trackArtist).font(.subheadline).lottaLower().opacity(0.65).lineLimit(1)
                     HStack(spacing: 10) {
-                        GeometryReader { geo in
-                            let f = player.duration > 0 ? min(1, player.currentTime / player.duration) : 0
-                            ZStack(alignment: .leading) {
-                                Capsule().fill(.white.opacity(0.2))
-                                Capsule().fill(Theme.accentMark).frame(width: geo.size.width * f)
-                            }
-                        }
-                        .frame(height: 4)
+                        ResumeProgress()
                         Button { player.togglePlayPause() } label: {
                             Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                                 .contentTransition(.symbolEffect(.replace))
@@ -319,7 +336,8 @@ struct AlbumView: View {
 
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var downloads: DownloadManager
-    @EnvironmentObject private var player: Player
+    /// Used only for actions: not observed, so playback progress doesn't redraw this screen.
+    private var player: Player { AppModel.shared.player }
     @State private var tracks: [BaseItem] = []
     @State private var loading = true
     @State private var addToPlaylist = false
@@ -514,7 +532,8 @@ enum CachedLyricsPeek {
 struct ArtistView: View {
     let artist: BaseItem
     @EnvironmentObject private var library: LibraryStore
-    @EnvironmentObject private var player: Player
+    /// Used only for actions: not observed, so playback progress doesn't redraw this screen.
+    private var player: Player { AppModel.shared.player }
     @State private var albums: [BaseItem] = []
     @State private var tracks: [BaseItem] = []
 
@@ -634,7 +653,8 @@ struct ArtistView: View {
 
 struct DownloadsView: View {
     @EnvironmentObject private var downloads: DownloadManager
-    @EnvironmentObject private var player: Player
+    /// Used only for actions: not observed, so playback progress doesn't redraw this screen.
+    private var player: Player { AppModel.shared.player }
 
     var body: some View {
         let albums = downloads.downloadedAlbums
@@ -642,13 +662,13 @@ struct DownloadsView: View {
         let pending = downloads.pending.values.sorted { $0.title < $1.title }
         List {
             if !pending.isEmpty {
-                Section("Descargando") {
+                Section(header: LottaListHeader("Descargando")) {
                     ForEach(pending) { item in
                         HStack(spacing: 12) {
                             ArtworkView(itemId: item.artworkItemId, cornerRadius: 4).frame(width: 40, height: 40)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(item.title).lineLimit(1)
-                                Text(item.trackArtist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                Text(item.title).lottaLower().lineLimit(1)
+                                Text(item.trackArtist).font(.caption).lottaLower().foregroundStyle(.secondary).lineLimit(1)
                             }
                             Spacer()
                             DownloadIndicator(state: downloads.state(for: item.id))
@@ -661,7 +681,7 @@ struct DownloadsView: View {
             }
 
             if !playlists.isEmpty {
-                Section("Playlists") {
+                Section(header: LottaListHeader("Playlists")) {
                     ForEach(playlists) { p in
                         NavigationLink(value: p) {
                             AlbumRow(album: p, subtitle: "\(downloads.tracks(inPlaylist: p.id).count) canciones")
@@ -688,7 +708,7 @@ struct DownloadsView: View {
                         }
                     }
                 } header: {
-                    Text("\(downloads.downloaded.count) canciones · \(ByteCountFormatter.string(fromByteCount: downloads.totalBytes, countStyle: .file))")
+                    LottaListHeader("\(downloads.downloaded.count) canciones · \(ByteCountFormatter.string(fromByteCount: downloads.totalBytes, countStyle: .file))", mono: true)
                 }
             }
         }
@@ -699,7 +719,8 @@ struct DownloadsView: View {
                                        description: Text("Toca ↓ en un álbum para tenerlo sin conexión."))
             }
         }
-        .navigationTitle("Descargas")
+        .lottaDarkScreen()
+        .navigationTitle("descargas")
         .toolbar {
             if !downloads.downloaded.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -715,7 +736,8 @@ struct DownloadsView: View {
 
 struct SearchView: View {
     @EnvironmentObject private var library: LibraryStore
-    @EnvironmentObject private var player: Player
+    /// Used only for actions: not observed, so playback progress doesn't redraw this screen.
+    private var player: Player { AppModel.shared.player }
     @State private var query = ""
     @State private var results: [BaseItem] = []
     @State private var searching = false
@@ -727,27 +749,31 @@ struct SearchView: View {
         let playlists = results.filter(\.isPlaylist)
         List {
             if !artists.isEmpty {
-                Section("Artistas") {
+                Section(header: LottaListHeader("Artistas")) {
                     ForEach(artists) { a in NavigationLink(value: a) { ArtistRow(artist: a) } }
+                        .listRowBackground(Color.clear)
                 }
             }
             if !albums.isEmpty {
-                Section("Álbumes") {
+                Section(header: LottaListHeader("Álbumes")) {
                     ForEach(albums) { a in NavigationLink(value: a) { AlbumRow(album: a) } }
+                        .listRowBackground(Color.clear)
                 }
             }
             if !playlists.isEmpty {
-                Section("Playlists") {
+                Section(header: LottaListHeader("Playlists")) {
                     ForEach(playlists) { p in NavigationLink(value: p) { AlbumRow(album: p, subtitle: "Playlist") } }
+                        .listRowBackground(Color.clear)
                 }
             }
             if !songs.isEmpty {
-                Section("Canciones") {
+                Section(header: LottaListHeader("Canciones")) {
                     ForEach(Array(songs.enumerated()), id: \.element.id) { i, s in
                         TrackRow(track: s, showArtwork: true)
                             .onTapGesture { player.play(songs, startAt: i) }
                             .trackContextMenu(s)
                     }
+                    .listRowBackground(Color.clear)
                 }
             }
         }
@@ -761,7 +787,8 @@ struct SearchView: View {
             }
         }
         .searchable(text: $query, prompt: "Artistas, álbumes o canciones")
-        .navigationTitle("Buscar")
+        .lottaDarkScreen()
+        .navigationTitle("buscar")
         .task(id: query) {
             guard query.count >= 2 else { results = []; return }
             try? await Task.sleep(for: .milliseconds(300))

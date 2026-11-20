@@ -30,6 +30,14 @@ struct MainView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var network: NetworkMonitor
 
+    init() {
+        // Editorial large titles ("descargas", "buscar"): condensed, tight
+        // tracking, scaled with Dynamic Type.
+        let base = UIFont.systemFont(ofSize: 40, weight: .heavy, width: .condensed)
+        let font = UIFontMetrics(forTextStyle: .largeTitle).scaledFont(for: base)
+        UINavigationBar.appearance().largeTitleTextAttributes = [.font: font, .kern: -1.2]
+    }
+
     var body: some View {
         TabView(selection: $tab) {
             NavigationStack { LibraryView().itemDestinations() }
