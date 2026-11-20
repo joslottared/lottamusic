@@ -5,12 +5,17 @@ enum LibraryTab: String, CaseIterable {
 }
 
 struct LibraryView: View {
+    @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var downloads: DownloadManager
     @EnvironmentObject private var network: NetworkMonitor
+    @EnvironmentObject private var player: Player
+    @Environment(\.openPlayer) private var openPlayer
+    @Environment(\.selectTab) private var selectTab
     @AppStorage("lotta.library.tab") private var tab: LibraryTab = .albums
     @AppStorage("lotta.library.downloadedOnly") private var downloadedOnly = false
     @State private var showSettings = false
+    @State private var songCount = 0
 
     private var onlyDownloaded: Bool { downloadedOnly || !network.isOnline }
 
@@ -30,20 +35,27 @@ struct LibraryView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
-                Picker("Sección", selection: $tab) {
-                    Text("Álbumes").tag(LibraryTab.albums)
-                    Text("Artistas").tag(LibraryTab.artists)
-                    Text("Playlists").tag(LibraryTab.playlists)
+            VStack(alignment: .leading, spacing: 18) {
+                serverCapsule
+
+                Text(player.current != nil ? "Sigue donde lo dejaste" : "Tu biblioteca")
+                    .lottaEditorial(size: 44, weight: .heavy)
+                    .lottaLower()
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+                    .padding(.top, 4)
+                    .accessibilityAddTraits(.isHeader)
+
+                if player.current != nil {
+                    ResumeStack()
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
+
+                filterPills
 
                 if let sync = library.sync {
                     SyncProgressRow(sync: sync)
                         .padding(12)
-                        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .padding(.horizontal)
+                        .lottaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
@@ -54,58 +66,130 @@ struct LibraryView: View {
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(.secondary)
                 } else if let err = library.lastError, library.albums.isEmpty {
-                    Text(err).font(.footnote).foregroundStyle(.red).padding(.horizontal)
+                    Text(err).font(.footnote).foregroundStyle(.red)
                 }
 
-                switch tab {
-                case .albums:
-                    if albums.isEmpty { emptyState } else { AlbumGrid(albums: albums) }
-                case .playlists:
-                    if playlists.isEmpty { emptyState } else { PlaylistList(playlists: playlists) }
-                case .artists:
-                    if artists.isEmpty {
-                        emptyState
-                    } else {
-                        LazyVStack(spacing: 0) {
-                            ForEach(artists) { artist in
-                                NavigationLink(value: artist) {
-                                    ArtistRow(artist: artist).padding(.vertical, 6)
+                Group {
+                    switch tab {
+                    case .albums:
+                        if albums.isEmpty { emptyState } else { AlbumGrid(albums: albums).padding(.horizontal, -16) }
+                    case .playlists:
+                        if playlists.isEmpty { emptyState } else { PlaylistList(playlists: playlists).padding(.horizontal, -16) }
+                    case .artists:
+                        if artists.isEmpty {
+                            emptyState
+                        } else {
+                            LazyVStack(spacing: 0) {
+                                ForEach(artists) { artist in
+                                    NavigationLink(value: artist) {
+                                        ArtistRow(artist: artist).padding(.vertical, 6)
+                                    }
+                                    .buttonStyle(.plain)
+                                    Divider().padding(.leading, 60)
                                 }
-                                .buttonStyle(.plain)
-                                Divider().padding(.leading, 60)
                             }
                         }
-                        .padding(.horizontal)
                     }
                 }
+                .frame(maxWidth: .infinity)
             }
+            .padding(.horizontal, 16)
             .padding(.bottom, 20)
             .animation(.spring(response: 0.35), value: library.isSyncing)
         }
-        .navigationTitle("Biblioteca")
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { downloadedOnly.toggle() } label: {
-                    Image(systemName: downloadedOnly ? "arrow.down.circle.fill" : "arrow.down.circle")
-                }
-                .accessibilityLabel("Solo descargado")
-            }
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                if library.isSyncing {
-                    ProgressView()
-                } else {
-                    Button { library.startSync() } label: {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                    }
-                    .disabled(!network.isOnline)
-                    .accessibilityLabel("Sincronizar biblioteca")
-                }
-                Button { showSettings = true } label: { Image(systemName: "gearshape") }
-            }
-        }
+        .scrollContentBackground(.hidden)
+        .background(Theme.darkBackground.ignoresSafeArea())
+        .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
+        .navigationTitle("biblioteca") // only shown as the back button
+        .toolbar(.hidden, for: .navigationBar)
         .refreshable { await library.refresh() }
         .task { if library.albums.isEmpty { await library.refresh() } }
+        .task(id: library.albums.count &+ (library.lastSync.map { Int($0.timeIntervalSince1970) } ?? 0)) {
+            songCount = library.albums.reduce(0) { $0 + library.cachedTracks(albumId: $1.id).count }
+        }
         .sheet(isPresented: $showSettings) { SettingsView() }
+    }
+
+    // MARK: Server capsule
+
+    private var statusColor: Color {
+        if network.isOnline { return .green }
+        return network.hasNetwork ? .orange : .gray
+    }
+
+    private var serverCapsule: some View {
+        GlassCapsule {
+            EmptyView()
+        } center: {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 9, height: 9)
+                    .shadow(color: statusColor.opacity(0.8), radius: network.isOnline ? 4 : 0)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(model.creds?.serverURL.host ?? "Jellyfin")
+                        .font(.subheadline.weight(.semibold))
+                        .lottaLower()
+                        .lineLimit(1)
+                    if songCount > 0 {
+                        Text("\(songCount) canciones").lottaLabel(mono: true).opacity(0.6)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, 12)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Servidor \(model.creds?.serverURL.host ?? ""), \(network.isOnline ? "en línea" : "sin conexión"), \(songCount) canciones")
+        } trailing: {
+            if library.isSyncing {
+                ProgressView()
+                    .frame(width: 46, height: 46)
+                    .background(Circle().fill(Theme.glassFill))
+            } else {
+                GlassCircleButton(systemImage: "arrow.triangle.2.circlepath",
+                                  accessibilityLabel: "Sincronizar biblioteca", style: .inset) {
+                    library.startSync()
+                }
+                .disabled(!network.isOnline)
+            }
+            GlassCircleButton(systemImage: "magnifyingglass", accessibilityLabel: "Buscar", style: .inset) {
+                selectTab(.search)
+            }
+            GlassCircleButton(systemImage: "gearshape", accessibilityLabel: "Ajustes", style: .inset) {
+                showSettings = true
+            }
+        }
+    }
+
+    // MARK: Filters
+
+    private var filterPills: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                filterPill(.albums, "Álbumes", icon: "square.grid.2x2")
+                filterPill(.artists, "Artistas", icon: "music.mic")
+                filterPill(.playlists, "Playlists", icon: "music.note.list")
+                Button { downloadedOnly.toggle() } label: {
+                    GlassPill(systemImage: downloadedOnly ? "arrow.down.circle.fill" : "arrow.down.circle",
+                              title: "Descargado", isActive: downloadedOnly)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Solo descargado")
+                .accessibilityAddTraits(downloadedOnly ? .isSelected : [])
+            }
+            .padding(.vertical, 2)
+        }
+        .scrollClipDisabled()
+    }
+
+    private func filterPill(_ value: LibraryTab, _ title: String, icon: String) -> some View {
+        Button { tab = value } label: {
+            GlassPill(systemImage: icon, title: title, isActive: tab == value)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(tab == value ? .isSelected : [])
     }
 
     @ViewBuilder private var emptyState: some View {
@@ -123,6 +207,79 @@ struct LibraryView: View {
     }
 }
 
+/// Restored / current playback: three tilted covers and a glass panel to
+/// pick up where you left off.
+private struct ResumeStack: View {
+    @EnvironmentObject private var player: Player
+    @Environment(\.openPlayer) private var openPlayer
+
+    /// Current track first, then what comes next (or what came before).
+    private var covers: [BaseItem] {
+        guard let current = player.current else { return [] }
+        var out = [current]
+        for item in player.upNext where out.count < 3 && !out.contains(where: { $0.artworkItemId == item.artworkItemId }) {
+            out.append(item)
+        }
+        for item in player.queue.prefix(player.index).reversed() where out.count < 3
+            && !out.contains(where: { $0.artworkItemId == item.artworkItemId }) {
+            out.append(item)
+        }
+        return out
+    }
+
+    var body: some View {
+        if let item = player.current {
+            let covers = covers
+            HStack(alignment: .center, spacing: 14) {
+                ZStack {
+                    ForEach(Array(covers.enumerated().reversed()), id: \.offset) { i, cover in
+                        ArtworkView(itemId: cover.artworkItemId, cornerRadius: 16)
+                            .frame(width: 118, height: 118)
+                            .shadow(color: .black.opacity(0.4), radius: 12, y: 8)
+                            .rotationEffect(.degrees([-4, 8, -12][i]))
+                            .offset(x: CGFloat(i) * 14, y: CGFloat(i) * -6)
+                            .opacity(i == 0 ? 1 : 0.85)
+                    }
+                }
+                .frame(width: 150, height: 150)
+                .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Seguir").lottaLabel(tracking: 1.2).foregroundStyle(Theme.accentMark)
+                    Text(item.title).font(.headline).lottaLower().lineLimit(2)
+                    Text(item.trackArtist).font(.subheadline).lottaLower().opacity(0.65).lineLimit(1)
+                    HStack(spacing: 10) {
+                        GeometryReader { geo in
+                            let f = player.duration > 0 ? min(1, player.currentTime / player.duration) : 0
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(.white.opacity(0.2))
+                                Capsule().fill(Theme.accentMark).frame(width: geo.size.width * f)
+                            }
+                        }
+                        .frame(height: 4)
+                        Button { player.togglePlayPause() } label: {
+                            Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                                .contentTransition(.symbolEffect(.replace))
+                                .font(.body.weight(.bold))
+                                .foregroundStyle(Theme.darkBackground)
+                                .frame(width: Theme.minTap, height: Theme.minTap)
+                                .background(Circle().fill(.white))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(player.isPlaying ? "Pausa" : "Seguir reproduciendo")
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lottaGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: openPlayer)
+            .accessibilityAction(named: "Abrir reproductor", openPlayer)
+        }
+    }
+}
+
 struct AlbumGrid: View {
     let albums: [BaseItem]
     @EnvironmentObject private var downloads: DownloadManager
@@ -133,15 +290,18 @@ struct AlbumGrid: View {
             ForEach(albums) { album in
                 NavigationLink(value: album) {
                     VStack(alignment: .leading, spacing: 6) {
-                        ArtworkView(itemId: album.id)
+                        ArtworkView(itemId: album.id, cornerRadius: 14)
                         Text(album.title)
-                            .font(.subheadline.weight(.medium))
+                            .font(.subheadline.weight(.semibold))
+                            .lottaLower()
                             .lineLimit(1)
                         HStack(spacing: 4) {
                             if downloadedIds.contains(album.id) {
                                 Image(systemName: "arrow.down.circle.fill").font(.caption2)
+                                    .foregroundStyle(Theme.accentMark)
+                                    .accessibilityLabel("Descargado")
                             }
-                            Text(album.artistLine).lineLimit(1)
+                            Text(album.artistLine).lottaLower().lineLimit(1)
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)

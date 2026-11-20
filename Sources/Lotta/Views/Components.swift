@@ -180,7 +180,7 @@ struct ArtistRow: View {
             ArtworkView(itemId: artist.id)
                 .frame(width: 48, height: 48)
                 .clipShape(Circle())
-            Text(artist.title).lineLimit(1)
+            Text(artist.title).lottaLower().lineLimit(1)
             Spacer()
         }
         .contentShape(Rectangle())
@@ -196,7 +196,7 @@ struct AlbumRow: View {
             ArtworkView(itemId: album.id, cornerRadius: 6)
                 .frame(width: 56, height: 56)
             VStack(alignment: .leading, spacing: 2) {
-                Text(album.title).lineLimit(1)
+                Text(album.title).lottaLower().lineLimit(1)
                 Text(subtitle ?? album.artistLine)
                     .font(.caption)
                     .foregroundStyle(.secondary)

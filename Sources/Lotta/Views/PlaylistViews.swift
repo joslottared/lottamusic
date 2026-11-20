@@ -11,7 +11,7 @@ struct PlaylistList: View {
                     HStack(spacing: 12) {
                         ArtworkView(itemId: p.id, cornerRadius: 6).frame(width: 56, height: 56)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(p.title).lineLimit(1)
+                            Text(p.title).lottaLower().lineLimit(1)
                             HStack(spacing: 4) {
                                 if downloads.playlistInfo[p.id] != nil {
                                     Image(systemName: "arrow.down.circle.fill").font(.caption2)
