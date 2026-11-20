@@ -14,13 +14,13 @@ struct NowPlayingView: View {
     @State private var panel: NowPlayingPanel = .artwork
     @State private var lyrics: Lyrics?
     @State private var lyricsLoaded = false
-    @State private var background = Color(white: 0.2)
     @State private var share: ShareRequest?
     @State private var dragOffset: CGFloat = 0
     @State private var swipeOffset: CGFloat = 0
     @State private var dragAxis: Axis?
     @State private var skipCount = 0
     @State private var addToPlaylist: BaseItem?
+    @State private var selectionRequest = 0
     @Environment(\.dismiss) private var dismiss
 
     /// One drag, two meanings, decided by the first movement:
@@ -67,21 +67,13 @@ struct NowPlayingView: View {
         let item = player.current
         ZStack {
             // Opaque base: the presentation background is clear (for the
-            // drag-down reveal), so the gradient must not be see-through.
+            // drag-down reveal), so the background must not be see-through.
             Color.black.ignoresSafeArea()
-            LinearGradient(colors: [background, background.opacity(0.55), .black],
-                           startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
+            AmbientBackground(itemId: item?.artworkItemId)
 
             VStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    Image(systemName: "chevron.down")
-                        .font(.title3.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 36)
-                        .opacity(0.8)
-                        .onTapGesture { dismiss() }
-                        .padding(.bottom, 8)
+                    topBar(item).padding(.bottom, 12)
 
                     if panel != .artwork, let item {
                         compactHeader(item).padding(.bottom, 8)
@@ -93,8 +85,9 @@ struct NowPlayingView: View {
                 Group {
                     switch panel {
                     case .artwork:
-                        ArtworkView(itemId: item?.artworkItemId, size: ArtworkSize.large, cornerRadius: 12)
-                            .shadow(color: .black.opacity(0.4), radius: 28, y: 14)
+                        ArtworkView(itemId: item?.artworkItemId, size: ArtworkSize.large, cornerRadius: 30)
+                            .frame(maxWidth: 310, maxHeight: 310)
+                            .shadow(color: .black.opacity(0.45), radius: 30, y: 16)
                             .scaleEffect(player.isPlaying ? 1 : 0.86)
                             .animation(.spring(response: 0.45, dampingFraction: 0.72), value: player.isPlaying)
                             .offset(x: swipeOffset)
@@ -103,9 +96,9 @@ struct NowPlayingView: View {
                             .contentShape(Rectangle())
                             .gesture(playerDrag)
                     case .lyrics:
-                        LyricsView(lyrics: lyrics, loaded: lyricsLoaded) { selection in
+                        LyricsView(lyrics: lyrics, loaded: lyricsLoaded, onShare: { selection in
                             if let item { share = ShareRequest(item: item, selection: selection) }
-                        }
+                        }, selectionRequest: selectionRequest)
                     case .queue:
                         QueueView()
                     }
@@ -115,16 +108,18 @@ struct NowPlayingView: View {
 
                 if panel == .artwork, let item {
                     titleRow(item)
-                        .padding(.top, 20)
+                        .padding(.top, 18)
                         .contentShape(Rectangle())
                         .simultaneousGesture(playerDrag)
                 }
 
-                Scrubber().padding(.top, 18)
-                controls.padding(.vertical, 18)
+                if let item { badgeRow(item).padding(.top, 8) }
+
+                Scrubber().padding(.top, 8)
+                controls.padding(.vertical, 14)
                 bottomBar
             }
-            .padding(.horizontal, 26)
+            .padding(.horizontal, 22)
             .padding(.top, 4)
             .padding(.bottom, 8)
         }
@@ -132,6 +127,7 @@ struct NowPlayingView: View {
         .sensoryFeedback(.impact(weight: .light), trigger: skipCount)
         .presentationBackground(.clear) // the app shows behind while dragging down
         .foregroundStyle(.white)
+        .tint(.white)
         .environment(\.colorScheme, .dark)
         .sheet(item: $share) { req in
             LyricsShareView(item: req.item, selection: req.selection)
@@ -144,106 +140,197 @@ struct NowPlayingView: View {
             lyrics = nil
             lyricsLoaded = false
             guard let item else { return }
-            if let img = await ArtworkCache.shared.image(for: item.artworkItemId, size: ArtworkSize.large),
-               let avg = img.averageColor {
-                let c = Color(uiColor: avg.adjusted(brightness: 0.28...0.55, minSaturation: 0.35))
-                withAnimation(.easeInOut(duration: 0.6)) { background = c }
-            }
             lyrics = await LyricsStore.shared.lyrics(for: item)
             lyricsLoaded = true
         }
     }
 
+    // MARK: Top
+
+    private func topBar(_ item: BaseItem?) -> some View {
+        GlassCapsule {
+            GlassCircleButton(systemImage: "chevron.down", accessibilityLabel: "Cerrar", style: .inset) {
+                dismiss()
+            }
+        } center: {
+            VStack(spacing: 1) {
+                Text("Sonando desde").lottaLabel().opacity(0.65)
+                Text(item?.album ?? item?.trackArtist ?? "")
+                    .font(.subheadline.weight(.semibold))
+                    .lottaLower()
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .combine)
+        } trailing: {
+            AirPlayButton()
+                .frame(width: 46, height: 46)
+                .background(Circle().fill(Theme.glassFill))
+                .accessibilityLabel("AirPlay")
+        }
+    }
+
     private func compactHeader(_ item: BaseItem) -> some View {
         HStack(spacing: 12) {
-            ArtworkView(itemId: item.artworkItemId, cornerRadius: 6)
+            ArtworkView(itemId: item.artworkItemId, cornerRadius: 10)
                 .frame(width: 52, height: 52)
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.title).font(.headline).lineLimit(1)
-                Text(item.trackArtist).font(.subheadline).opacity(0.7).lineLimit(1)
+                Text(item.title).font(.headline).lottaLower().lineLimit(1)
+                Text(item.trackArtist).font(.subheadline).lottaLower().opacity(0.7).lineLimit(1)
             }
             Spacer()
         }
     }
+
+    // MARK: Title, badges
 
     private func titleRow(_ item: BaseItem) -> some View {
-        HStack(alignment: .center) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.title).font(.title3.bold()).lineLimit(1)
-                Text(item.trackArtist).font(.title3).opacity(0.7).lineLimit(1)
+                Text(item.title).font(.title2.bold()).lottaLower().lineLimit(1)
+                Text(item.trackArtist).font(.title3).lottaLower().opacity(0.7).lineLimit(1)
             }
-            Spacer()
-            Menu {
-                Button { addToPlaylist = item } label: {
-                    Label("Añadir a playlist…", systemImage: "music.note.list")
-                }
-                if downloads.isDownloaded(item.id) {
-                    Button(role: .destructive) { downloads.delete([item.id]) } label: {
-                        Label("Eliminar descarga", systemImage: "trash")
-                    }
-                } else if downloads.pending[item.id] == nil {
-                    Button { downloads.download([item]) } label: {
-                        Label("Descargar", systemImage: "arrow.down.circle")
-                    }
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.body.weight(.bold))
-                    .frame(width: 32, height: 32)
-                    .background(.white.opacity(0.15), in: Circle())
-            }
+            Spacer(minLength: 0)
+            // Placeholder: favorites aren't implemented yet.
+            GlassCircleButton(systemImage: "heart", accessibilityLabel: "Favorito (próximamente)", size: 44) {}
+                .disabled(true)
         }
     }
+
+    private func badgeRow(_ item: BaseItem) -> some View {
+        let badges = downloads.formatBadges(for: item.id) + ((lyrics?.isSynced ?? false) ? ["LRC"] : [])
+        let hasLyrics = !(lyrics?.lines.isEmpty ?? true)
+        return HStack(spacing: 6) {
+            ForEach(badges, id: \.self) { TechBadge(text: $0) }
+            Spacer(minLength: 0)
+            if hasLyrics {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) { panel = .lyrics }
+                    selectionRequest += 1
+                } label: {
+                    Text("Crear tarjeta ›")
+                        .font(.footnote.weight(.semibold))
+                        .lottaLower()
+                        .frame(minHeight: Theme.minTap)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .opacity(0.85)
+                .accessibilityLabel("Crear tarjeta con la letra")
+            }
+        }
+        .frame(minHeight: Theme.minTap)
+    }
+
+    // MARK: Transport
 
     private var controls: some View {
-        HStack {
-            Spacer()
-            Button { player.previous() } label: {
-                Image(systemName: "backward.fill").font(.system(size: 30))
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            GlassCircleButton(systemImage: "backward.fill", accessibilityLabel: "Anterior", size: 64) {
+                player.previous()
             }
-            Spacer()
+            Spacer(minLength: 0)
             Button { player.togglePlayPause() } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 50))
+                    .font(.system(size: 34, weight: .bold))
                     .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 70, height: 70)
+                    .foregroundStyle(Theme.darkBackground)
+                    .frame(width: 86, height: 86)
+                    .background(Circle().fill(.white))
+                    .shadow(color: .black.opacity(0.3), radius: 16, y: 8)
+                    .contentShape(Circle())
             }
-            Spacer()
-            Button { player.next() } label: {
-                Image(systemName: "forward.fill").font(.system(size: 30))
+            .buttonStyle(.plain)
+            .accessibilityLabel(player.isPlaying ? "Pausa" : "Reproducir")
+            Spacer(minLength: 0)
+            GlassCircleButton(systemImage: "forward.fill", accessibilityLabel: "Siguiente", size: 64) {
+                player.next()
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
     }
+
+    // MARK: Bottom
 
     private var bottomBar: some View {
-        HStack {
-            panelButton(.lyrics, icon: "quote.bubble")
-            Spacer()
-            AirPlayButton().frame(width: 44, height: 44)
-            Spacer()
-            Button { player.repeatMode = player.repeatMode.next } label: {
-                Image(systemName: player.repeatMode == .one ? "repeat.1" : "repeat")
-                    .opacity(player.repeatMode == .off ? 0.55 : 1)
-                    .frame(width: 44, height: 44)
-            }
-            Spacer()
-            panelButton(.queue, icon: "list.bullet")
+        // Full pills when they fit; icon-only pills with big text sizes.
+        ViewThatFits(in: .horizontal) {
+            bottomRow(compact: false)
+            bottomRow(compact: true)
         }
-        .font(.title3)
-        .buttonStyle(.plain)
     }
 
-    private func panelButton(_ target: NowPlayingPanel, icon: String) -> some View {
+    private func bottomRow(compact: Bool) -> some View {
+        HStack(spacing: 8) {
+            panelPill(.lyrics, icon: "quote.bubble", title: "Letra", compact: compact)
+            panelPill(.queue, icon: "list.bullet", title: "Cola", compact: compact)
+            if let item = player.current { downloadPill(item, compact: compact) }
+            Spacer(minLength: 0)
+            GlassCircleButton(systemImage: "shuffle",
+                              accessibilityLabel: player.isShuffled ? "Desactivar aleatorio" : "Aleatorio",
+                              size: 44, isActive: player.isShuffled) {
+                player.toggleShuffle()
+            }
+            GlassCircleButton(systemImage: player.repeatMode == .one ? "repeat.1" : "repeat",
+                              accessibilityLabel: "Repetir", size: 44,
+                              isActive: player.repeatMode != .off) {
+                player.repeatMode = player.repeatMode.next
+            }
+        }
+    }
+
+    private func panelPill(_ target: NowPlayingPanel, icon: String, title: String, compact: Bool) -> some View {
         Button {
             withAnimation(.easeInOut(duration: 0.25)) { panel = panel == target ? .artwork : target }
         } label: {
-            Image(systemName: icon)
-                .frame(width: 44, height: 44)
-                .background(panel == target ? AnyShapeStyle(.white.opacity(0.2)) : AnyShapeStyle(.clear),
-                            in: RoundedRectangle(cornerRadius: 10))
-                .opacity(panel == target ? 1 : 0.7)
+            GlassPill(systemImage: icon, title: compact ? "" : title, isActive: panel == target)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(panel == target ? .isSelected : [])
+    }
+
+    private func downloadPill(_ item: BaseItem, compact: Bool) -> some View {
+        let state = downloads.state(for: item.id)
+        let (icon, title): (String, String) = switch state {
+        case .done: ("checkmark.circle.fill", "Guardada")
+        case .downloading, .queued: ("arrow.down.circle.dotted", "Descargando")
+        default: ("arrow.down.circle", "Descargar")
+        }
+        return Menu {
+            Button { addToPlaylist = item } label: {
+                Label("Añadir a playlist…", systemImage: "music.note.list")
+            }
+            if downloads.isDownloaded(item.id) {
+                Button(role: .destructive) { downloads.delete([item.id]) } label: {
+                    Label("Eliminar descarga", systemImage: "trash")
+                }
+            } else if downloads.pending[item.id] == nil {
+                Button { downloads.download([item]) } label: {
+                    Label("Descargar", systemImage: "arrow.down.circle")
+                }
+            }
+        } label: {
+            GlassPill(systemImage: icon, title: compact ? "" : title)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+}
+
+/// Format tags for the track that's playing, from data the app already has:
+/// the downloaded file's type, or the streaming quality when it's a fixed MP3.
+/// Unknown (original-quality streaming) → no tag.
+extension DownloadManager {
+    func formatBadges(for id: String) -> [String] {
+        if let file = downloaded[id]?.fileName {
+            let ext = (file as NSString).pathExtension.lowercased()
+            return ext.isEmpty ? [] : [ext.uppercased()]
+        }
+        switch AppSettings.streamQuality {
+        case .original: return []
+        case .high: return ["MP3", "320"]
+        case .saver: return ["MP3", "192"]
         }
     }
 }
@@ -258,12 +345,17 @@ struct Scrubber: View {
         VStack(spacing: 6) {
             GeometryReader { geo in
                 let w = geo.size.width
+                let x = max(0, min(w, w * value / duration))
+                let thumb: CGFloat = dragValue == nil ? 14 : 22
                 ZStack(alignment: .leading) {
-                    Capsule().fill(.white.opacity(0.25))
-                    Capsule().fill(.white.opacity(dragValue == nil ? 0.75 : 1))
-                        .frame(width: max(0, min(w, w * value / duration)))
+                    Capsule().fill(.white.opacity(0.22)).frame(height: 6)
+                    Capsule().fill(.white).frame(width: x, height: 6)
+                    Circle()
+                        .fill(.white)
+                        .frame(width: thumb, height: thumb)
+                        .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                        .offset(x: min(max(0, x - thumb / 2), w - thumb))
                 }
-                .frame(height: dragValue == nil ? 6 : 11)
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .gesture(
@@ -275,15 +367,25 @@ struct Scrubber: View {
                         }
                 )
             }
-            .frame(height: 22)
+            .frame(height: 28)
             .animation(.easeOut(duration: 0.15), value: dragValue == nil)
+            .accessibilityElement()
+            .accessibilityLabel("Posición")
+            .accessibilityValue(formatTime(value))
+            .accessibilityAdjustableAction { dir in
+                switch dir {
+                case .increment: player.seek(to: min(duration, player.currentTime + 10))
+                case .decrement: player.seek(to: max(0, player.currentTime - 10))
+                @unknown default: break
+                }
+            }
 
             HStack {
                 Text(formatTime(value))
                 Spacer()
                 Text("-" + formatTime(max(0, duration - value)))
             }
-            .font(.caption.monospacedDigit())
+            .font(.caption.monospacedDigit().monospaced())
             .opacity(0.6)
         }
     }
@@ -301,10 +403,10 @@ struct QueueView: View {
                 }
                 ForEach(Array(player.upNext.enumerated()), id: \.offset) { offset, item in
                     HStack(spacing: 12) {
-                        ArtworkView(itemId: item.artworkItemId, cornerRadius: 4).frame(width: 40, height: 40)
+                        ArtworkView(itemId: item.artworkItemId, cornerRadius: 8).frame(width: 44, height: 44)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(item.title).lineLimit(1)
-                            Text(item.trackArtist).font(.caption).opacity(0.6).lineLimit(1)
+                            Text(item.title).lottaLower().lineLimit(1)
+                            Text(item.trackArtist).font(.caption).lottaLower().opacity(0.6).lineLimit(1)
                         }
                         Spacer()
                     }
@@ -318,7 +420,7 @@ struct QueueView: View {
                 }
                 .listRowBackground(Color.clear)
             } header: {
-                Text("A continuación").font(.headline).foregroundStyle(.white)
+                Text("A continuación").lottaLabel().foregroundStyle(.white.opacity(0.7))
             }
         }
         .listStyle(.plain)

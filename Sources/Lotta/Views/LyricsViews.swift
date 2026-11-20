@@ -21,9 +21,12 @@ struct LyricsView: View {
     let lyrics: Lyrics?
     let loaded: Bool
     var onShare: (LyricsSelection) -> Void
+    /// Bump to enter selection mode from outside ("crear tarjeta").
+    var selectionRequest: Int = 0
 
     @EnvironmentObject private var player: Player
     @State private var selecting = false
+    @State private var handledRequest = 0
     /// Selected lines are always one contiguous block (line ids are indices).
     @State private var selected: ClosedRange<Int>?
     @State private var rejectTick = 0
@@ -84,7 +87,9 @@ struct LyricsView: View {
             }
             .onAppear {
                 if let current { proxy.scrollTo(current, anchor: UnitPoint(x: 0.5, y: 0.3)) }
+                handleSelectionRequest()
             }
+            .onChange(of: selectionRequest) { _, _ in handleSelectionRequest() }
             .overlay(alignment: .topTrailing) {
                 // Enters selection mode; tapping again leaves it.
                 Button {
@@ -122,6 +127,7 @@ struct LyricsView: View {
             : (synced ? (isCurrent ? 1 : 0.35) : 0.9)
         return Text(line.text.isEmpty ? "♪" : line.text)
             .font(.system(size: 28, weight: .bold))
+            .lottaLower()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, selecting ? 8 : 0)
             .padding(.horizontal, selecting ? 12 : 0)
@@ -148,6 +154,15 @@ struct LyricsView: View {
                     selected = line.id...line.id
                 }
             }
+    }
+
+    private func handleSelectionRequest() {
+        guard selectionRequest != handledRequest else { return }
+        handledRequest = selectionRequest
+        withAnimation {
+            selecting = true
+            selected = nil
+        }
     }
 
     /// Whether tapping this line can grow the block to include it.

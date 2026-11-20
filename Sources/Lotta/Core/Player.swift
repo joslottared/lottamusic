@@ -24,6 +24,9 @@ final class Player: ObservableObject {
     @Published private(set) var duration: TimeInterval = 0
     @Published var repeatMode: RepeatMode = .off
     @Published var errorMessage: String?
+    @Published private(set) var isShuffled = false
+    /// Queue order before shuffling, to restore it when shuffle is turned off.
+    private var unshuffledQueue: [BaseItem]?
     private var itemStatusObservation: NSKeyValueObservation?
 
     var current: BaseItem? { queue.indices.contains(index) ? queue[index] : nil }
@@ -138,7 +141,30 @@ final class Player: ObservableObject {
         }
         queue = list
         index = start
+        isShuffled = shuffle
+        unshuffledQueue = shuffle ? tracks.filter(isPlayable) : nil
         load(autoplay: true)
+    }
+
+    /// On: shuffles what's left after the current track. Off: puts the
+    /// queue back in its original order (keeping tracks added meanwhile).
+    func toggleShuffle() {
+        guard let item = current else { return }
+        if isShuffled {
+            let original = unshuffledQueue ?? queue
+            let inQueue = Set(queue.map(\.id))
+            let inOriginal = Set(original.map(\.id))
+            let restored = original.filter { inQueue.contains($0.id) } + queue.filter { !inOriginal.contains($0.id) }
+            queue = restored
+            index = restored.firstIndex { $0.id == item.id } ?? 0
+            unshuffledQueue = nil
+            isShuffled = false
+        } else {
+            unshuffledQueue = queue
+            queue = Array(queue[...index]) + queue[(index + 1)...].shuffled()
+            isShuffled = true
+        }
+        saveState()
     }
 
     func jump(to newIndex: Int) {
@@ -171,6 +197,8 @@ final class Player: ObservableObject {
         player.replaceCurrentItem(with: nil)
         queue = []
         index = 0
+        isShuffled = false
+        unshuffledQueue = nil
         currentTime = 0
         duration = 0
         pendingResume = nil

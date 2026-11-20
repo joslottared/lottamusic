@@ -201,10 +201,12 @@ struct GlassPill: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: systemImage).font(.subheadline.weight(.semibold))
-            Text(title).font(.subheadline.weight(.medium)).lottaLower().lineLimit(1)
+            if !title.isEmpty {
+                Text(title).font(.subheadline.weight(.medium)).lottaLower().lineLimit(1)
+            }
         }
-        .padding(.horizontal, 16)
-        .frame(minHeight: Theme.minTap)
+        .padding(.horizontal, title.isEmpty ? 0 : 16)
+        .frame(minWidth: Theme.minTap, minHeight: Theme.minTap)
         .background { if isActive { Capsule().fill(Theme.accent) } }
         .modifier(PillGlass(enabled: !isActive))
         .contentShape(Capsule())
